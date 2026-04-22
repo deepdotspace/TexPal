@@ -1,4 +1,15 @@
+/**
+ * Sidebar — file-tree + outline + trash. Lives INSIDE the editor card.
+ *
+ * The AI chat used to share this sidebar via an activity rail. We moved it
+ * out of here: chat is now its own sidebar OUTSIDE the editor card, on the
+ * left of the shell, toggleable separately. This keeps the two surfaces
+ * distinct — the rounded card contains the "app" (files + editor + PDF),
+ * the chat lives in the shell's left gutter.
+ */
+
 import React, { useCallback, useState } from 'react'
+import { ChevronLeft } from 'lucide-react'
 import { FileTree } from './FileTree'
 import { TrashPanel } from './TrashPanel'
 import { DocumentOutline } from './DocumentOutline'
@@ -115,8 +126,7 @@ export function Sidebar({
     if (trimmedTitle && trimmedTitle !== documentTitle) {
       try {
         await onRenameDocument(trimmedTitle)
-      } catch (err) {
-        // Revert on error
+      } catch {
         setEditTitle(documentTitle)
       }
     } else {
@@ -150,131 +160,122 @@ export function Sidebar({
   return (
     <div
       className={`flex flex-col h-full bg-surface-sidebar border-r border-border overflow-hidden ${
-        collapsed ? 'w-0' : ''
+        collapsed ? 'w-0 invisible' : ''
       }`}
     >
-      {!collapsed && (
-        <>
-          {/* Header */}
-          <div className="flex items-center gap-1 px-2 h-toolbar border-b border-border shrink-0 group min-w-0 overflow-hidden">
-            {onHome && (
-              <button
-                className="toolbar-btn !w-7 !h-7"
-                onClick={onHome}
-                title="Back to Home"
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                  <polyline points="9 22 9 12 15 12 15 22" />
-                </svg>
-              </button>
-            )}
-            <button
-              className="toolbar-btn !w-7 !h-7"
-              onClick={onToggle}
-              title="Collapse sidebar (Ctrl+B)"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <line x1="9" y1="3" x2="9" y2="21" />
-              </svg>
-            </button>
-            {isEditingTitle ? (
-              <input
-                ref={titleInputRef}
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                onBlur={handleTitleBlur}
-                onKeyDown={handleTitleKeyDown}
-                className="flex-1 min-w-0 text-[12px] font-medium text-content bg-surface-overlay border border-accent rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-            ) : (
-              <span 
-                className={`text-[12px] font-medium text-content truncate flex-1 ${onRenameDocument ? 'cursor-pointer hover:text-accent transition-colors' : ''}`}
-                title={documentTitle}
-                onClick={handleTitleClick}
-              >
-                {documentTitle}
-              </span>
-            )}
-            {onRenameDocument && !isEditingTitle && (
-              <button
-                className="toolbar-btn !w-6 !h-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setIsEditingTitle(true)
-                }}
-                title="Rename document"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                </svg>
-              </button>
-            )}
+      {/* Header */}
+      <div className="flex items-center gap-1 px-2 h-toolbar border-b border-border shrink-0 group min-w-0 overflow-hidden">
+        {onHome && (
+          <button
+            className="toolbar-btn !w-7 !h-7"
+            onClick={onHome}
+            title="Back to Home"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+          </button>
+        )}
+        {isEditingTitle ? (
+          <input
+            ref={titleInputRef}
+            type="text"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onBlur={handleTitleBlur}
+            onKeyDown={handleTitleKeyDown}
+            className="flex-1 min-w-0 text-[12px] font-medium text-content bg-surface-overlay border border-accent rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
+          />
+        ) : (
+          <span
+            className={`text-[12px] font-medium text-content truncate flex-1 ${onRenameDocument ? 'cursor-pointer hover:text-accent transition-colors' : ''}`}
+            title={documentTitle}
+            onClick={handleTitleClick}
+          >
+            {documentTitle}
+          </span>
+        )}
+        {onRenameDocument && !isEditingTitle && (
+          <button
+            className="toolbar-btn !w-6 !h-6 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={(e) => {
+              e.stopPropagation()
+              setIsEditingTitle(true)
+            }}
+            title="Rename document"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+          </button>
+        )}
+        <button
+          className="toolbar-btn !w-6 !h-6 text-content-secondary hover:text-content shrink-0"
+          onClick={onToggle}
+          title="Collapse sidebar (Ctrl+B)"
+          aria-label="Collapse sidebar"
+        >
+          <ChevronLeft size={13} />
+        </button>
+      </div>
+
+      {/* File tree / Outline */}
+      <div ref={contentRef} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex-1 min-h-[180px] overflow-hidden flex flex-col">
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <FileTree
+              files={files}
+              activeFileId={activeFileId}
+              onSelect={onSelectFile}
+              onAddFile={onAddFile}
+              onDeleteFile={onDeleteFile}
+              onRenameFile={onRenameFile}
+              onMoveFile={onMoveFile}
+              onDuplicateFile={onDuplicateFile}
+              onDeleteFolder={onDeleteFolder}
+              onSetAsMainFile={onSetAsMainFile}
+              onCollapse={onToggle}
+              getBaseName={getBaseName}
+              getDirName={getDirName}
+              joinPath={joinPath}
+              sanitizePath={sanitizePath}
+              getFolderPaths={getFolderPaths}
+            />
           </div>
 
-          {/* Content with resizable File Tree / Outline split */}
-          <div ref={contentRef} className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div className="flex-1 min-h-[180px] overflow-hidden flex flex-col">
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <FileTree
-                  files={files}
-                  activeFileId={activeFileId}
-                  onSelect={onSelectFile}
-                  onAddFile={onAddFile}
-                  onDeleteFile={onDeleteFile}
-                  onRenameFile={onRenameFile}
-                  onMoveFile={onMoveFile}
-                  onDuplicateFile={onDuplicateFile}
-                  onDeleteFolder={onDeleteFolder}
-                  onSetAsMainFile={onSetAsMainFile}
-                  onCollapse={onToggle}
-                  getBaseName={getBaseName}
-                  getDirName={getDirName}
-                  joinPath={joinPath}
-                  sanitizePath={sanitizePath}
-                  getFolderPaths={getFolderPaths}
-                />
-              </div>
+          <TrashPanel
+            trashFiles={trashFiles}
+            onRestore={onRestoreFile}
+            onPermanentlyDelete={onPermanentlyDeleteFile}
+            getBaseName={getBaseName}
+          />
+        </div>
 
-              {/* Trash Panel */}
-              <TrashPanel
-                trashFiles={trashFiles}
-                onRestore={onRestoreFile}
-                onPermanentlyDelete={onPermanentlyDeleteFile}
-                getBaseName={getBaseName}
+        {outlineOpen && (
+          <ResizeDivider
+            orientation="horizontal"
+            onResize={handleOutlineResize}
+            className="mx-2"
+          />
+        )}
+
+        <div
+          className={`flex flex-col overflow-hidden border-t border-border/80 ${outlineOpen ? 'min-h-[120px]' : ''}`}
+          style={outlineOpen ? { height: outlinePanelHeight } : undefined}
+        >
+          <SectionHeader label="OUTLINE" open={outlineOpen} onToggle={() => setOutlineOpen(o => !o)} />
+          {outlineOpen && (
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <DocumentOutline
+                outline={outline}
+                onJumpToLine={onJumpToLine}
               />
             </div>
-
-            {outlineOpen && (
-              <ResizeDivider
-                orientation="horizontal"
-                onResize={handleOutlineResize}
-                className="mx-2"
-              />
-            )}
-
-            {/* Outline Section */}
-            <div
-              className={`flex flex-col overflow-hidden border-t border-border/80 ${outlineOpen ? 'min-h-[120px]' : ''}`}
-              style={outlineOpen ? { height: outlinePanelHeight } : undefined}
-            >
-              <SectionHeader label="OUTLINE" open={outlineOpen} onToggle={() => setOutlineOpen(o => !o)} />
-              {outlineOpen && (
-                <div className="flex-1 min-h-0 overflow-y-auto">
-                  <DocumentOutline
-                    outline={outline}
-                    onJumpToLine={onJumpToLine}
-                  />
-                </div>
-              )}
-            </div>
-
-          </div>
-        </>
-      )}
+          )}
+        </div>
+      </div>
     </div>
   )
 }

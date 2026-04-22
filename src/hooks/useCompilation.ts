@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback, useRef } from 'react'
-import { useQuery, useMutations } from 'deepspace'
+import { useQuery, useMutations, getAuthToken } from 'deepspace'
 import type {
   CompilationResult,
   CompilationLog,
@@ -79,19 +79,52 @@ function mapApiLogItem(item: any): LogItem {
   }
 }
 
+function extractTexErrorsFromRawLog(rawLog: string): LogItem[] {
+  if (!rawLog) return []
+  // TeX error convention: lines beginning with "! " are error headlines,
+  // optionally followed by a context block and an "l.N <snippet>" locator.
+  const lines = rawLog.split(/\r?\n/)
+  const out: LogItem[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line.startsWith('! ')) continue
+    const message = line.slice(2).trim()
+    // Capture up to the next blank line as context.
+    const ctx: string[] = []
+    for (let j = i + 1; j < Math.min(lines.length, i + 12); j++) {
+      if (!lines[j].trim()) break
+      ctx.push(lines[j])
+    }
+    // Try to pull a line number from the context block (e.g. "l.42 ...").
+    const locLine = ctx.find((l) => /^l\.\d+/.test(l))
+    const lineNum = locLine ? Number(locLine.match(/^l\.(\d+)/)?.[1]) : undefined
+    out.push({ message, context: ctx.join('\n'), line: lineNum })
+  }
+  return out
+}
+
 function buildCompilationLog(data: any): CompilationLog {
   const parsed = data?.parsedLog
   if (!parsed) {
     const rawLog = data?.compilationLog || ''
+    const texErrors = extractTexErrorsFromRawLog(rawLog)
+    const errors: LogItem[] = texErrors.length > 0
+      ? texErrors
+      : rawLog
+        ? [{
+            message: rawLog.split(/\r?\n/).find((l: string) => l.trim()) || 'Compilation failed',
+            context: rawLog,
+          }]
+        : []
     return {
       ...EMPTY_COMPILATION_LOG,
       compiled: !!data?.compiled,
       duration: data?.duration,
       rawLog,
-      errors: rawLog ? [{ message: rawLog.slice(0, 1000), context: '' }] : [],
+      errors,
       summary: {
-        errorsCount: rawLog ? 1 : 0, warningsCount: 0, badboxesCount: 0,
-        missingRefsCount: 0, hasErrors: !!rawLog, hasWarnings: false,
+        errorsCount: errors.length, warningsCount: 0, badboxesCount: 0,
+        missingRefsCount: 0, hasErrors: errors.length > 0, hasWarnings: false,
       },
     }
   }
@@ -123,7 +156,6 @@ async function compileCloud(
   entryFilePath: string,
   compiler: CloudCompiler,
   bibEngine: BibEngine,
-  documentId: string,
 ): Promise<CompilationResult> {
   const entryFile = files.find(file => file.path === entryFilePath)
 
@@ -163,11 +195,13 @@ async function compileCloud(
     return { path: file.path, file: filePayload }
   })
 
-  resources.push({ path: `.project/${documentId}`, content: ' ' })
-
+  const token = await getAuthToken()
   const res = await fetch('/api/integrations/latex-compiler/compile', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({ compiler, resources, options: { bibliography: { command: bibEngine } } }),
   })
 
@@ -202,22 +236,56 @@ export function useCompilation({
   const prevBlobUrlRef = useRef<string | null>(null)
 
   const { records: logRecords } = useQuery('compilationLogs')
-  const { create, put } = useMutations('compilationLogs')
+  const { create, createConfirmed, put } = useMutations('compilationLogs')
   const { put: putDocument } = useMutations('documents')
 
+  // Track the log row for this document across renders. `logRecords` captured
+  // in a useCallback would go stale between rapid compiles; a ref updated each
+  // render gives persistLog the current snapshot. A second per-doc ref caches
+  // the id we just created so a second compile firing before the query tick
+  // updates still lands as a put, not a duplicate create.
+  const logRecordsRef = useRef(logRecords)
+  logRecordsRef.current = logRecords
+  const knownLogIdRef = useRef<{ documentId: string; recordId: string } | null>(null)
+  const persistInFlightRef = useRef<Promise<void> | null>(null)
+
   const persistLog = useCallback(async (log: CompilationLog) => {
-    const existing = logRecords.find((r: any) => r.data.documentId === documentId)
-    const payload: Record<string, any> = {
-      documentId, compiled: log.compiled, duration: log.duration ?? 0,
-      errorsCount: log.summary.errorsCount, warningsCount: log.summary.warningsCount,
-      badboxesCount: log.summary.badboxesCount, missingRefsCount: log.summary.missingRefsCount,
-      rawLog: log.rawLog.slice(0, 50000),
-      parsedErrors: JSON.stringify(log.errors), parsedWarnings: JSON.stringify(log.warnings),
-      parsedBadboxes: JSON.stringify(log.badboxes), parsedMissingRefs: JSON.stringify(log.missingRefs),
-      logFiles: JSON.stringify(log.logFiles), compiledAt: Date.now(),
+    // Serialize log writes for this hook instance so two compiles that finish
+    // back-to-back can't both pass the "is there an existing row?" check.
+    const prior = persistInFlightRef.current
+    const run = (async () => {
+      if (prior) await prior.catch(() => {})
+
+      const payload: Record<string, any> = {
+        documentId, compiled: log.compiled, duration: log.duration ?? 0,
+        errorsCount: log.summary.errorsCount, warningsCount: log.summary.warningsCount,
+        badboxesCount: log.summary.badboxesCount, missingRefsCount: log.summary.missingRefsCount,
+        rawLog: log.rawLog.slice(0, 50000),
+        parsedErrors: JSON.stringify(log.errors), parsedWarnings: JSON.stringify(log.warnings),
+        parsedBadboxes: JSON.stringify(log.badboxes), parsedMissingRefs: JSON.stringify(log.missingRefs),
+        logFiles: JSON.stringify(log.logFiles), compiledAt: Date.now(),
+      }
+
+      const cached = knownLogIdRef.current
+      const cachedId = cached && cached.documentId === documentId ? cached.recordId : null
+      const existing = cachedId
+        ? { recordId: cachedId }
+        : logRecordsRef.current.find((r: any) => r.data.documentId === documentId)
+
+      if (existing) {
+        put(existing.recordId, payload)
+        knownLogIdRef.current = { documentId, recordId: existing.recordId }
+        return
+      }
+
+      const recordId = await createConfirmed(payload)
+      knownLogIdRef.current = { documentId, recordId }
+    })()
+    persistInFlightRef.current = run
+    try { await run } finally {
+      if (persistInFlightRef.current === run) persistInFlightRef.current = null
     }
-    if (existing) { put(existing.recordId, payload) } else { create(payload) }
-  }, [logRecords, documentId, create, put])
+  }, [documentId, create, createConfirmed, put])
 
   const compile = useCallback(async (
     files: CompilationProjectFile[], entryFilePath: string,
@@ -227,7 +295,7 @@ export function useCompilation({
     setCompilationLog(EMPTY_COMPILATION_LOG)
 
     try {
-      const result = await compileCloud(files, entryFilePath, compiler, bibEngine, documentId)
+      const result = await compileCloud(files, entryFilePath, compiler, bibEngine)
       if (result.success && result.pdfUrl) {
         const compiledAt = Date.now()
         if (prevBlobUrlRef.current) URL.revokeObjectURL(prevBlobUrlRef.current)

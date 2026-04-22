@@ -1,17 +1,15 @@
 /**
- * StatusBar — bottom bar showing word count, cursor position, compile status, save status.
+ * StatusBar — bottom bar showing word count, cursor position, and compile status.
  */
 
 import React from 'react'
 import type { CursorPosition } from './CodeEditor'
 import type { CompileStatus, CloudCompiler } from '../../constants'
-import type { SaveStatus } from '../../hooks/useAutoSave'
 
 interface StatusBarProps {
   cursor: CursorPosition
   wordCount: number
   compileStatus: CompileStatus
-  saveStatus: SaveStatus
   lastCompiledAt: number | null
   compiler?: CloudCompiler
   compileDuration?: number
@@ -40,7 +38,6 @@ export function StatusBar({
   cursor,
   wordCount,
   compileStatus,
-  saveStatus,
   lastCompiledAt,
   compiler,
   compileDuration,
@@ -64,7 +61,6 @@ export function StatusBar({
       ? 'text-success'
       : 'text-content-secondary'
 
-  const saveLabel = saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : ''
   const engineLabel = compiler || 'pdflatex'
 
   return (
@@ -72,11 +68,6 @@ export function StatusBar({
       <div className="flex items-center gap-4">
         <span>Ln {cursor.line}, Col {cursor.col}</span>
         <span>{wordCount} words</span>
-        {saveLabel && (
-          <span className={saveStatus === 'saving' ? 'text-accent' : 'text-success'}>
-            {saveLabel}
-          </span>
-        )}
       </div>
       <div className="flex items-center gap-4">
         <span className="text-content-secondary opacity-60">{engineLabel}</span>

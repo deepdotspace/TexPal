@@ -85,13 +85,11 @@ export function TableSizeSelector({ onSelect, onClose, anchorRef }: TableSizeSel
             return (
               <button
                 key={`${rowIdx}-${colIdx}`}
-                className={`
-                  w-5 h-5 rounded border transition-all duration-75
-                  ${isSelected
-                    ? 'bg-accent border-accent shadow-sm scale-105'
-                    : 'bg-surface-inset border-border hover:border-accent/60 hover:bg-accent/10'
-                  }
-                `}
+                className="w-5 h-5 rounded transition-all duration-75"
+                style={isSelected
+                  ? { backgroundColor: '#6366F1', border: '1px solid #6366F1', transform: 'scale(1.05)' }
+                  : { backgroundColor: 'rgba(128, 128, 128, 0.1)', border: '1px solid rgba(128, 128, 128, 0.35)' }
+                }
                 onMouseEnter={() => handleCellHover(rowIdx, colIdx)}
                 onClick={() => handleCellClick(rowIdx, colIdx)}
                 aria-label={`${rowIdx + 1} rows, ${colIdx + 1} columns`}

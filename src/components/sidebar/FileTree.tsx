@@ -636,7 +636,7 @@ export function FileTree({
           ) : (
             <span className="truncate flex-1 text-left">{displayName}</span>
           )}
-          {file.data.isEntryFile && (
+          {!!file.data.isEntryFile && (
             <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 font-medium ${
               isActive
                 ? 'bg-accent/15 text-accent'

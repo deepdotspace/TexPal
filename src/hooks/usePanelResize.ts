@@ -1,8 +1,9 @@
 /**
- * usePanelResize — manage resizable panel widths for the three-panel layout.
+ * usePanelResize — manage resizable panel widths for the editor card.
  *
- * Stores sidebar width and editor/PDF split ratio.
- * Handles drag events on ResizeDivider components.
+ * The file-tree sidebar and the editor/PDF split live INSIDE the card.
+ * The AI chat sidebar lives OUTSIDE the card (to the left) and is managed
+ * separately by EditorLayout.
  */
 
 import { useState, useCallback, useRef } from 'react'
@@ -15,24 +16,33 @@ interface PanelSizes {
 const SIDEBAR_MIN = 160
 const SIDEBAR_MAX = 360
 const SIDEBAR_DEFAULT = 220
+
 const EDITOR_RATIO_MIN = 0.25
 const EDITOR_RATIO_MAX = 0.75
 const EDITOR_RATIO_DEFAULT = 0.5
 
 const STORAGE_KEY = 'latex-editor-panel-sizes'
 
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v))
+}
+
 function loadSizes(): PanelSizes {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (stored) {
       const parsed = JSON.parse(stored)
+      const width = typeof parsed.sidebarWidth === 'number' ? parsed.sidebarWidth : SIDEBAR_DEFAULT
       return {
-        sidebarWidth: Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, parsed.sidebarWidth || SIDEBAR_DEFAULT)),
-        editorRatio: Math.max(EDITOR_RATIO_MIN, Math.min(EDITOR_RATIO_MAX, parsed.editorRatio || EDITOR_RATIO_DEFAULT)),
+        sidebarWidth: clamp(width, SIDEBAR_MIN, SIDEBAR_MAX),
+        editorRatio: clamp(parsed.editorRatio ?? EDITOR_RATIO_DEFAULT, EDITOR_RATIO_MIN, EDITOR_RATIO_MAX),
       }
     }
   } catch { /* ignore */ }
-  return { sidebarWidth: SIDEBAR_DEFAULT, editorRatio: EDITOR_RATIO_DEFAULT }
+  return {
+    sidebarWidth: SIDEBAR_DEFAULT,
+    editorRatio: EDITOR_RATIO_DEFAULT,
+  }
 }
 
 function saveSizes(sizes: PanelSizes) {
@@ -49,9 +59,9 @@ export function usePanelResize() {
   const handleSidebarResize = useCallback((clientX: number) => {
     if (!containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
-    const newWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, clientX - rect.left))
+    const raw = clientX - rect.left
     setSizes(prev => {
-      const next = { ...prev, sidebarWidth: newWidth }
+      const next = { ...prev, sidebarWidth: clamp(raw, SIDEBAR_MIN, SIDEBAR_MAX) }
       saveSizes(next)
       return next
     })
@@ -66,7 +76,7 @@ export function usePanelResize() {
     const editorStart = rect.left + sidebarW + dividerWidth
     const relativeX = clientX - editorStart
 
-    const ratio = Math.max(EDITOR_RATIO_MIN, Math.min(EDITOR_RATIO_MAX, relativeX / availableWidth))
+    const ratio = clamp(relativeX / availableWidth, EDITOR_RATIO_MIN, EDITOR_RATIO_MAX)
 
     setSizes(prev => {
       const next = { ...prev, editorRatio: ratio }

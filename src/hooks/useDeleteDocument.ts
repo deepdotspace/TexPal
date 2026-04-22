@@ -1,54 +1,47 @@
 /**
  * useDeleteDocument — cascading delete for a LaTeX document.
  *
- * Removes all child data before deleting the document record itself.
+ * The collection cascade runs server-side via the `deleteDocument` action
+ * (see src/actions/index.ts). The action bypasses user RBAC so a partial
+ * failure doesn't leave rows the caller can't reach.
+ *
+ * R2-backed PDF blobs are cleaned up best-effort from the client, since
+ * the action-tools surface doesn't expose R2.
  */
 
 import { useCallback } from 'react'
-import { useQuery, useMutations, useR2Files } from 'deepspace'
+import { useQuery, useR2Files, getAuthToken } from 'deepspace'
 
 export function useDeleteDocument() {
   const { records: versionRecords } = useQuery('documentVersions')
-  const { remove: removeVersion } = useMutations('documentVersions')
-
-  const { records: projectFileRecords } = useQuery('projectFiles')
-  const { remove: removeProjectFile } = useMutations('projectFiles')
-
-  const { records: compilationLogRecords } = useQuery('compilationLogs')
-  const { remove: removeCompilationLog } = useMutations('compilationLogs')
-
-  const { records: agentEditRecords } = useQuery('agentEdits')
-  const { remove: removeAgentEdit } = useMutations('agentEdits')
-
-  const { removeConfirmed: removeDocument } = useMutations('documents')
   const { deleteFile } = useR2Files()
 
   const deleteDocument = useCallback(async (docId: string): Promise<void> => {
-    const docVersions = versionRecords.filter((r: any) => r.data.documentId === docId)
-
-    // Best-effort R2 file cleanup
+    // Best-effort R2 cleanup for any PDF blobs owned by this document's
+    // versions. Fire-and-forget — orphaned R2 objects are not user-visible
+    // and can be swept later.
+    const docVersions = (versionRecords as Array<{ data: { documentId?: string; pdfKey?: string } }>)
+      .filter((r) => r.data.documentId === docId)
     for (const version of docVersions) {
-      if ((version as any).data.pdfKey) {
-        deleteFile((version as any).data.pdfKey).catch(() => {})
+      if (version.data.pdfKey) {
+        deleteFile(version.data.pdfKey).catch(() => {})
       }
     }
 
-    for (const version of docVersions) removeVersion(version.recordId)
-
-    const docProjectFiles = projectFileRecords.filter((r: any) => r.data.documentId === docId)
-    for (const file of docProjectFiles) removeProjectFile(file.recordId)
-
-    const docLogs = compilationLogRecords.filter((r: any) => r.data.documentId === docId)
-    for (const log of docLogs) removeCompilationLog(log.recordId)
-
-    const docAgentEdits = agentEditRecords.filter((r: any) => r.data.documentId === docId)
-    for (const edit of docAgentEdits) removeAgentEdit(edit.recordId)
-
-    await removeDocument(docId)
-  }, [
-    versionRecords, projectFileRecords, compilationLogRecords, agentEditRecords,
-    removeVersion, removeProjectFile, removeCompilationLog, removeAgentEdit, removeDocument,
-  ])
+    const token = await getAuthToken()
+    const res = await fetch('/api/actions/deleteDocument', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ documentId: docId }),
+    })
+    const result = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string }
+    if (!result.success) {
+      throw new Error(result.error || `Failed to delete document (status ${res.status})`)
+    }
+  }, [versionRecords, deleteFile])
 
   return { deleteDocument }
 }

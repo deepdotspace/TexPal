@@ -12,7 +12,6 @@ import { TemplatePicker } from '../components/templates/TemplatePicker'
 import { useEditorSettings } from '../hooks/useEditorSettings'
 import { useThemeSync } from '../hooks/useThemeSync'
 import { useDeleteDocument } from '../hooks/useDeleteDocument'
-import { useDocumentCollaborators } from '../hooks/useDocumentCollaborators'
 import { useActiveDocumentContext } from '../hooks/useActiveDocumentContext'
 
 export default function HomeRoute() {
@@ -27,7 +26,6 @@ export default function HomeRoute() {
   const { createConfirmed, putConfirmed } = useMutations('documents')
   const { deleteDocument } = useDeleteDocument()
   const toast = useToast()
-  const teamInfoMap = useDocumentCollaborators()
   const {
     upsertActiveDocumentContext,
   } = useActiveDocumentContext()
@@ -128,7 +126,6 @@ export default function HomeRoute() {
       isCreating={isCreating}
       recentDocuments={documents as any[]}
       currentUserId={user?.id || null}
-      teamInfoMap={teamInfoMap}
     />
   )
 }

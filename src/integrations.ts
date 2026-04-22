@@ -10,5 +10,5 @@
  */
 
 export const integrations: Record<string, { billing: 'developer' | 'user' }> = {
-  'latex-compiler': { billing: 'developer' },
+  'latex-compiler': { billing: 'user' },
 }

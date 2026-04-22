@@ -5,7 +5,6 @@ interface ShareModalProps {
   open: boolean
   onClose: () => void
   documentTitle: string
-  teamId: string | null
 }
 
 export function ShareModal({ open, onClose, documentTitle }: ShareModalProps) {

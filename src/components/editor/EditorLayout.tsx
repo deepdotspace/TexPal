@@ -11,7 +11,7 @@
 
 import React, { useRef, useCallback, useMemo, useState, useEffect } from 'react'
 import { useMutations, useR2Files } from 'deepspace'
-import { useCompilation, useDocumentOutline, useAutoSave, usePanelResize, useEditorSettings, useVersionHistory, useAgentEditsProcessor } from '../../hooks'
+import { useCompilation, useDocumentOutline, usePanelResize, useEditorSettings, useVersionHistory, useAgentEditsProcessor } from '../../hooks'
 import { useProjectFiles } from '../../hooks/useProjectFiles'
 import type { ActiveDocumentContextValue } from '../../hooks/useActiveDocumentContext'
 import { countWords } from './StatusBar'
@@ -29,6 +29,7 @@ import { ResizeDivider } from '../shared/ResizeDivider'
 import { EditorSettingsPanel } from '../settings/EditorSettingsPanel'
 import { KeyboardShortcutsModal } from '../shared/KeyboardShortcutsModal'
 import { ShareModal } from '../share/ShareModal'
+import { AiChatSidebar, AiChatToggleButton } from '../ai-chat/AiChatSidebar'
 
 interface EditorLayoutProps {
   documentId: string
@@ -85,17 +86,9 @@ export function EditorLayout({
     setCurrentTitle(documentTitle)
   }, [documentTitle])
 
-  const teamId = null
-
-  // Active file's live text (lifted from FileEditor via callback)
+  // Live text buffer for the active file, lifted from FileEditor.
   const [activeText, setActiveText] = useState('')
 
-  // ── Legacy Yjs stubs (Yjs migration not needed in new SDK) ──
-  const legacyText = ''
-  const legacySynced = true
-
-  // ── Project files ───────────────────────────────────────────────
-  // Wait for valid teamId before initializing project files
   const {
     files,
     trashFiles,
@@ -121,10 +114,9 @@ export function EditorLayout({
     getDirName,
     joinPath,
     sanitizePath,
-  } = useProjectFiles(documentId, { legacyText, legacySynced, templateId, teamId })
+  } = useProjectFiles(documentId, { templateId })
 
-  // ── Agent edits processor ────────────────────────────────────────
-  useAgentEditsProcessor({ documentId, teamId, files })
+  useAgentEditsProcessor({ documentId, files })
 
   // ── Other hooks ─────────────────────────────────────────────────
   const { settings, updateSetting } = useEditorSettings()
@@ -143,7 +135,6 @@ export function EditorLayout({
   const { versions, addVersion, getPdfUrl } = useVersionHistory(documentId)
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
   const outline = useDocumentOutline(activeText)
-  const { saveStatus, markDirty } = useAutoSave()
   const {
     sidebarWidth,
     sidebarCollapsed,
@@ -155,12 +146,39 @@ export function EditorLayout({
   } = usePanelResize()
   const activeFilePath = activeFile?.data?.path || ''
 
+  // ── AI chat sidebar (outside the card, on the left of the shell) ────────
+  const [chatOpen, setChatOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('ai-chat-open') !== '0' } catch { return true }
+  })
+  const [chatWidth, setChatWidth] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('ai-chat-width') || '', 10)
+      if (!isNaN(v) && v >= 320 && v <= 640) return v
+    } catch { /* ignore */ }
+    return 420
+  })
+  useEffect(() => {
+    try { localStorage.setItem('ai-chat-open', chatOpen ? '1' : '0') } catch { /* ignore */ }
+  }, [chatOpen])
+  useEffect(() => {
+    try { localStorage.setItem('ai-chat-width', String(chatWidth)) } catch { /* ignore */ }
+  }, [chatWidth])
+
+  const handleChatResize = useCallback((clientX: number) => {
+    if (!containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    // Chat lives on the RIGHT. Width = distance from mouse to the shell's
+    // right edge. Dragging LEFT makes the chat wider.
+    const raw = rect.right - clientX
+    const clamped = Math.max(320, Math.min(640, raw))
+    setChatWidth(clamped)
+  }, [containerRef])
+
   // ── Keep activeFilePath in sync when the user switches files ────────────────
   useEffect(() => {
     void persistActiveDocumentContext({
       activeDocumentId: documentId,
       activeDocumentTitle: currentTitle || documentTitle || 'Untitled',
-      teamId,
       activeFilePath,
     }).catch((error: unknown) => {
       console.error('Failed to sync active file path:', error)
@@ -179,8 +197,7 @@ export function EditorLayout({
 
   const handleTextChange = useCallback((text: string) => {
     setActiveText(text)
-    markDirty()
-  }, [markDirty])
+  }, [])
 
   const handlePlainContentSync = useCallback((fileId: string, content: string) => {
     updatePlainContent(fileId, content)
@@ -393,73 +410,79 @@ export function EditorLayout({
   }
 
   // ── Render ──────────────────────────────────────────────────────
+  // Shell layout adopted from the SDK sidebar feature — an outer tinted
+  // flex container (`.editor-shell`) wraps a flex sibling sidebar and a
+  // rounded `.editor-card`. Expanding the sidebar pushes the card's left
+  // edge right; there is no overlay. See docs/ai-chat/sidebar-ux.md.
   const effectiveSidebarWidth = sidebarCollapsed ? 0 : sidebarWidth
 
   return (
-    <div ref={containerRef} className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      {/* Error banner */}
-      {compileStatus === 'error' && compilationLog.summary.hasErrors && (
-        <div className="px-3 py-1.5 bg-danger-light border-b border-danger/20 flex items-center gap-2 shrink-0">
-          <span className="w-2 h-2 bg-danger rounded-full shrink-0" />
-          <span className="text-xs text-danger truncate">
-            Compilation failed — {compilationLog.errors[0]?.message || 'check the compile log for details'}
-          </span>
-        </div>
-      )}
+    <div ref={containerRef} className="editor-shell flex-1">
+      <div className="editor-shell-row">
+        {/* Card — the rounded rectangle that holds the "app": file-tree
+            sidebar, editor, PDF. Visually distinct from the chat on the right. */}
+        <div className="editor-card">
+          {/* Compile-error banner */}
+          {compileStatus === 'error' && compilationLog.summary.hasErrors && (
+            <div className="px-3 py-1.5 bg-danger-light border-b border-border flex items-center gap-2 shrink-0">
+              <span className="w-2 h-2 bg-danger rounded-full shrink-0" />
+              <span className="text-xs text-danger truncate">
+                Compilation failed — {compilationLog.errors[0]?.message || 'check the compile log for details'}
+              </span>
+            </div>
+          )}
 
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Sidebar */}
-        <div style={{ width: effectiveSidebarWidth, minWidth: effectiveSidebarWidth, maxWidth: effectiveSidebarWidth }} className="shrink-0 overflow-hidden">
-          <Sidebar
-            documentTitle={currentTitle}
-            onRenameDocument={handleRenameDocument}
-            files={files}
-            trashFiles={trashFiles}
-            activeFileId={activeFileId}
-            onSelectFile={setActiveFileId}
-            onAddFile={(path, content, base64Content) => addFile(path, content, base64Content)}
-            onDeleteFile={(id) => deleteFile(id)}
-            onRenameFile={renameFile}
-            onMoveFile={moveFile}
-            onDuplicateFile={duplicateFile}
-            onDeleteFolder={deleteFolder}
-            onSetAsMainFile={setAsMainFile}
-            onRestoreFile={restoreFile}
-            onPermanentlyDeleteFile={permanentlyDeleteFile}
-            outline={outline}
-            onJumpToLine={handleJumpToLine}
-            collapsed={sidebarCollapsed}
-            onToggle={toggleSidebar}
-            onHome={onBack}
-            getBaseName={getBaseName}
-            getDirName={getDirName}
-            joinPath={joinPath}
-            sanitizePath={sanitizePath}
-            getFolderPaths={getFolderPaths}
-          />
-        </div>
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            {/* File-tree sidebar — INSIDE the card. */}
+            <div style={{ width: effectiveSidebarWidth, minWidth: effectiveSidebarWidth, maxWidth: effectiveSidebarWidth }} className="shrink-0 overflow-hidden">
+              <Sidebar
+                documentTitle={currentTitle}
+                onRenameDocument={handleRenameDocument}
+                files={files}
+                trashFiles={trashFiles}
+                activeFileId={activeFileId}
+                onSelectFile={setActiveFileId}
+                onAddFile={(path, content, base64Content) => addFile(path, content, base64Content)}
+                onDeleteFile={(id) => deleteFile(id)}
+                onRenameFile={renameFile}
+                onMoveFile={moveFile}
+                onDuplicateFile={duplicateFile}
+                onDeleteFolder={deleteFolder}
+                onSetAsMainFile={setAsMainFile}
+                onRestoreFile={restoreFile}
+                onPermanentlyDeleteFile={permanentlyDeleteFile}
+                outline={outline}
+                onJumpToLine={handleJumpToLine}
+                collapsed={sidebarCollapsed}
+                onToggle={toggleSidebar}
+                onHome={onBack}
+                getBaseName={getBaseName}
+                getDirName={getDirName}
+                joinPath={joinPath}
+                sanitizePath={sanitizePath}
+                getFolderPaths={getFolderPaths}
+              />
+            </div>
 
-        {/* Sidebar toggle when collapsed */}
-        {sidebarCollapsed && (
-          <button
-            className="toolbar-btn shrink-0 mx-0.5 self-start mt-2"
-            onClick={toggleSidebar}
-            title="Show sidebar (Ctrl+B)"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-              <line x1="9" y1="3" x2="9" y2="21" />
-            </svg>
-          </button>
-        )}
+            {sidebarCollapsed && (
+              <button
+                className="toolbar-btn shrink-0 self-start mt-2 ml-1"
+                onClick={toggleSidebar}
+                title="Show files (Ctrl+B)"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="9" y1="3" x2="9" y2="21" />
+                </svg>
+              </button>
+            )}
 
-        {/* Sidebar resize divider */}
-        {!sidebarCollapsed && (
-          <ResizeDivider orientation="vertical" onResize={handleSidebarResize} />
-        )}
+            {!sidebarCollapsed && (
+              <ResizeDivider orientation="vertical" onResize={handleSidebarResize} />
+            )}
 
-        {/* Editor Panel */}
-        <div className="flex flex-col min-h-0 min-w-0" style={{ flex: editorRatio }}>
+            {/* Editor Panel */}
+            <div className="flex flex-col min-h-0 min-w-0" style={{ flex: editorRatio }}>
           <EditorToolbar
             onInsertSnippet={handleInsertSnippet}
             compiler={settings.compiler}
@@ -496,55 +519,83 @@ export function EditorLayout({
           </div>
         </div>
 
-        {/* Editor / PDF resize divider */}
-        <ResizeDivider orientation="vertical" onResize={handleEditorResize} />
+            {/* Editor / PDF resize divider */}
+            <ResizeDivider orientation="vertical" onResize={handleEditorResize} />
 
-        {/* PDF Panel */}
-        <div className="flex flex-col min-h-0 min-w-0" style={{ flex: 1 - editorRatio }}>
-          <PdfViewer
-            pdfUrl={displayPdfUrl}
-            isCompiling={isCompiling}
-            onDownloadSource={handleDownloadSource}
-            onShareClick={() => setShareOpen(true)}
-            onCompile={handleCompile}
-            versions={versions}
-            selectedVersionId={selectedVersionId}
-            onSelectVersion={setSelectedVersionId}
-            documentTitle={currentTitle}
-          />
+            {/* PDF Panel */}
+            <div className="flex flex-col min-h-0 min-w-0" style={{ flex: 1 - editorRatio }}>
+              <PdfViewer
+                pdfUrl={displayPdfUrl}
+                isCompiling={isCompiling}
+                onDownloadSource={handleDownloadSource}
+                onShareClick={() => setShareOpen(true)}
+                onCompile={handleCompile}
+                versions={versions}
+                selectedVersionId={selectedVersionId}
+                onSelectVersion={setSelectedVersionId}
+                documentTitle={currentTitle}
+              />
+            </div>
+          </div>
+
+          {/* Bottom section — compile log + status bar, inside the card. */}
+          <div className="flex flex-col shrink-0 min-h-0 w-full">
+            {compileLogOpen && (
+              <ResizeDivider
+                orientation="horizontal"
+                onResize={handleCompileLogResize}
+                className="mx-0 shrink-0"
+              />
+            )}
+            <CompileLog
+              compilationLog={compilationLog}
+              onJumpToLine={handleJumpToLine}
+              forceOpen={compileStatus === 'error'}
+              height={compileLogOpen ? compileLogHeight : undefined}
+              onOpenChange={setCompileLogOpen}
+            />
+
+            <div className="shrink-0">
+              <StatusBar
+                cursor={cursor}
+                wordCount={wordCount}
+                compileStatus={compileStatus}
+                lastCompiledAt={lastCompiledAt}
+                compiler={settings.compiler}
+                compileDuration={compilationLog.duration}
+              />
+            </div>
+          </div>
         </div>
-      </div>
+        {/* end editor-card */}
 
-      {/* Bottom section: compile log + status bar — constrained so they don't overflow */}
-      <div className="flex flex-col shrink-0 min-h-0 w-full">
-        {compileLogOpen && (
-          <ResizeDivider
-            orientation="horizontal"
-            onResize={handleCompileLogResize}
-            className="mx-0 shrink-0"
-          />
+        {/* Resize handle for chat — only when chat is open, sits between the
+            editor card and the chat panel. */}
+        {chatOpen && (
+          <ResizeDivider orientation="vertical" onResize={handleChatResize} />
         )}
-        <CompileLog
-          compilationLog={compilationLog}
-          onJumpToLine={handleJumpToLine}
-          forceOpen={compileStatus === 'error'}
-          height={compileLogOpen ? compileLogHeight : undefined}
-          onOpenChange={setCompileLogOpen}
+
+        {/* AI chat sidebar — OUTSIDE the editor card, slides between 0 and
+            `chatWidth` based on `chatOpen`. When closed renders 0-width
+            (invisible) so ChatPanel stays mounted and useChat/localStorage
+            state survive. */}
+        <AiChatSidebar
+          open={chatOpen}
+          width={chatWidth}
+          documentId={documentId}
+          activeFilePath={activeFilePath || null}
+          activeFileContent={activeText}
         />
 
-        {/* Status Bar */}
-        <div className="shrink-0">
-        <StatusBar
-        cursor={cursor}
-        wordCount={wordCount}
-        compileStatus={compileStatus}
-        saveStatus={saveStatus}
-        lastCompiledAt={lastCompiledAt}
-        compiler={settings.compiler}
-        compileDuration={compilationLog.duration}
-        />
+        {/* Always-present toggle rail — the smiley stays at this fixed
+            viewport position in both open and closed states. Clicking
+            toggles the sidebar; the editor card slides left to make room
+            when opening, slides back right when closing. Smooth anchor. */}
+        <div className="shrink-0 flex flex-col items-center pt-3" style={{ width: 52 }}>
+          <AiChatToggleButton open={chatOpen} onToggle={() => setChatOpen((v) => !v)} />
         </div>
       </div>
+      {/* end editor-shell-row */}
 
       {/* Settings slide-over */}
       <EditorSettingsPanel
@@ -565,7 +616,6 @@ export function EditorLayout({
         open={shareOpen}
         onClose={() => setShareOpen(false)}
         documentTitle={currentTitle}
-        teamId={teamId}
       />
     </div>
   )

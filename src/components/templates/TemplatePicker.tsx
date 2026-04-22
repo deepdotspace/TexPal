@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from 'react'
 import { APP_NAME, STARTER_TEMPLATES, type StarterTemplate } from '../../constants'
 import { useGitHubTemplates, type GitHubTemplate } from '../../hooks/useGitHubTemplates'
 import { useEditorSettings } from '../../hooks/useEditorSettings'
-import type { TeamInfo } from '../../hooks/useDocumentCollaborators'
 import { TemplateCard } from './TemplateCard'
 import { Modal, ConfirmModal } from '../ui/Modal'
 import { Button } from '../ui/Button'
@@ -16,10 +15,9 @@ interface DocumentRecord {
     title: string
     templateId?: string
     lastCompiledAt?: number
-    teamId?: string
   }
 }
-  
+
 interface TemplatePickerProps {
   onSelectTemplate: (template: StarterTemplate | GitHubTemplate) => void
   onOpenDocument: (doc: DocumentRecord) => void
@@ -28,7 +26,6 @@ interface TemplatePickerProps {
   isCreating: boolean
   recentDocuments: DocumentRecord[]
   currentUserId: string | null
-  teamInfoMap?: Map<string, TeamInfo>
 }
 
 function formatRelativeTime(value?: string | number): string {
@@ -107,10 +104,9 @@ export function TemplatePicker({
   onOpenDocument, 
   onRenameDocument,
   onDeleteDocument,
-  isCreating, 
+  isCreating,
   recentDocuments,
   currentUserId,
-  teamInfoMap,
 }: TemplatePickerProps) {
   const hasDocuments = recentDocuments.length > 0
   const hasMyDocuments = recentDocuments.some((doc) => !doc.createdBy || doc.createdBy === currentUserId)
@@ -207,12 +203,6 @@ export function TemplatePicker({
     } finally {
       setIsDeleting(false)
     }
-  }
-
-  const getCollaboratorCount = (doc: DocumentRecord): number => {
-    if (!teamInfoMap || !doc.data.teamId) return 0
-    const info = teamInfoMap.get(doc.data.teamId)
-    return info ? info.memberCount : 0
   }
 
   return (
@@ -360,8 +350,6 @@ export function TemplatePicker({
             ) : (
               <div className="flex flex-col gap-1.5">
                 {visibleDocuments.map((doc) => {
-                  const collabCount = getCollaboratorCount(doc)
-                  const isSharedDoc = collabCount > 1
                   const isMyTab = activeTab === 'my'
                   const ownerName = !isMyTab && doc.createdBy ? (doc.data.title || 'Unknown') : null
 
@@ -398,17 +386,6 @@ export function TemplatePicker({
                             <span className="text-sm font-medium text-content truncate">
                               {doc.data.title || 'Untitled'}
                             </span>
-                            {isMyTab && isSharedDoc && (
-                              <span className="collab-badge" title={`Shared with ${collabCount - 1} other${collabCount - 1 === 1 ? '' : 's'}`}>
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                                  <circle cx="8.5" cy="7" r="4" />
-                                  <path d="M20 8v6" />
-                                  <path d="M23 11h-6" />
-                                </svg>
-                                {collabCount}
-                              </span>
-                            )}
                           </div>
                           <div className="text-xs text-content-tertiary flex items-center gap-1.5">
                             <span>{getTemplateLabel(doc.data.templateId, githubTemplates)}</span>
@@ -416,20 +393,6 @@ export function TemplatePicker({
                               <>
                                 <span className="text-content-tertiary">·</span>
                                 <span>by {ownerName}</span>
-                              </>
-                            )}
-                            {!isMyTab && isSharedDoc && (
-                              <>
-                                <span className="text-content-tertiary">·</span>
-                                <span className="inline-flex items-center gap-0.5">
-                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                                    <circle cx="9" cy="7" r="4" />
-                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                                  </svg>
-                                  {collabCount}
-                                </span>
                               </>
                             )}
                           </div>

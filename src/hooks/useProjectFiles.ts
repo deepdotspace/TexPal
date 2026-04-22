@@ -12,7 +12,6 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery, useMutations } from 'deepspace'
-// Note: teamId removed from new SDK — data is room-scoped
 import { BLANK_TEMPLATE } from '../constants'
 import { useGitHubTemplates } from './useGitHubTemplates'
 import type { CompilationProjectFile } from './useCompilation'
@@ -33,10 +32,7 @@ export interface ProjectFileRecord {
 }
 
 interface UseProjectFilesOptions {
-  legacyText: string
-  legacySynced: boolean
   templateId?: string
-  teamId?: string | null
 }
 
 const TEXT_FILE_TYPES: Record<string, string> = {
@@ -140,8 +136,8 @@ function inferFileType(path: string): string {
   return 'tex'
 }
 
-export function useProjectFiles(documentId: string, options: UseProjectFilesOptions) {
-  const { legacyText, legacySynced, templateId, teamId } = options
+export function useProjectFiles(documentId: string, options: UseProjectFilesOptions = {}) {
+  const { templateId } = options
 
   const { records, status, error } = useQuery('projectFiles', {
     where: { documentId },
@@ -192,9 +188,6 @@ export function useProjectFiles(documentId: string, options: UseProjectFilesOpti
       setInitError(null)
       return
     }
-
-    // No project files yet — wait for legacy content sync
-    if (!legacySynced) return
 
     initRef.current = true
     setInitError(null)
@@ -251,10 +244,6 @@ export function useProjectFiles(documentId: string, options: UseProjectFilesOpti
             }
           }
         }
-        if (!initialContent && legacyText) {
-          initialContent = legacyText
-        }
-
         const existingMain = existingRecords.find(r => r.data.path === 'main.tex')
         if (existingMain) {
           setActiveFileId(existingMain.recordId)
@@ -277,7 +266,7 @@ export function useProjectFiles(documentId: string, options: UseProjectFilesOpti
     }
 
     void initializeContent()
-  }, [status, error, records, files, legacySynced, legacyText, templateId, documentId,  createConfirmed, loadTemplateContent, loadTemplateFiles])
+  }, [status, error, records, files, templateId, documentId, createConfirmed, loadTemplateContent, loadTemplateFiles])
 
   // After migration, the query updates with the new record
   useEffect(() => {
@@ -467,26 +456,51 @@ export function useProjectFiles(documentId: string, options: UseProjectFilesOpti
     return newId
   }, [files, getBaseName, getDirName, joinPath, documentId,  create])
 
+  // Fresh-content overrides keyed by recordId. Populated synchronously when
+  // `updatePlainContent` fires (including FileEditor's unmount flush on file
+  // switch) so compile sees the latest text even before the DO roundtrip has
+  // updated the useQuery-backed `files` array. Entries self-expire once the
+  // real record catches up.
+  const freshContentRef = useRef<Record<string, string>>({})
+
   const updatePlainContent = useCallback((id: string, plainContent: string) => {
+    freshContentRef.current[id] = plainContent
     put(id, { plainContent })
   }, [put])
+
+  useEffect(() => {
+    const overrides = freshContentRef.current
+    const typedRecords = records as ProjectFileRecord[]
+    for (const [id, overrideText] of Object.entries(overrides)) {
+      const file = typedRecords.find((r) => r.recordId === id)
+      if (file && (file.data.plainContent ?? '') === overrideText) {
+        delete overrides[id]
+      }
+    }
+  }, [records])
 
   // ── Compilation helper ────────────────────────────────────────────
 
   const getFilesForCompilation = useCallback((activeText: string): CompilationProjectFile[] => {
+    const resolveText = (f: ProjectFileRecord) => {
+      if (f.recordId === activeFileId) return activeText
+      const override = freshContentRef.current[f.recordId]
+      if (override !== undefined) return override
+      return f.data.plainContent || ''
+    }
+
     return files
       .filter(f => {
         // Skip .gitkeep files (UI-only folder placeholders)
         if (f.data.path.endsWith('.gitkeep')) return false
-        
+
         // Skip empty binary files
         if (isBinaryFile(f.data.path)) {
           return f.data.base64Content && f.data.base64Content.length > 0
         }
-        
+
         // Skip empty text files
-        const content = f.recordId === activeFileId ? activeText : (f.data.plainContent || '')
-        return content.length > 0
+        return resolveText(f).length > 0
       })
       .map(f => ({
         path: f.data.path,
@@ -495,9 +509,7 @@ export function useProjectFiles(documentId: string, options: UseProjectFilesOpti
               base64Content: f.data.base64Content || '',
             }
           : {
-              content: f.recordId === activeFileId
-                ? activeText
-                : (f.data.plainContent || ''),
+              content: resolveText(f),
             }),
       }))
   }, [files, activeFileId])

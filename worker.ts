@@ -31,12 +31,16 @@ import {
   PresenceRoom as PresenceRoomBase,
 } from 'deepspace/worker'
 import type { ActionTools, ActionResult, DOManifest, DOBindings } from 'deepspace/worker'
-import { streamText } from 'ai'
+import { streamText, type LanguageModelV1 } from 'ai'
 import { actions } from './src/actions/index.js'
 import { handleCron } from './src/cron.js'
 import { schemas } from './src/schemas.js'
 import { integrations } from './src/integrations.js'
-import { buildSystemPrompt, buildReadOnlyTools } from './src/ai/tools.js'
+import { buildChatTools } from './src/ai/tools.js'
+import { buildLatexSystemPrompt } from './src/ai/latex-prompt.js'
+import { loadContext } from './src/ai/context.js'
+import { resolveModel } from './src/ai/models.js'
+import { makeScopeId } from './src/constants.js'
 
 // =============================================================================
 // DO Manifest — declares all Durable Objects for dynamic deploy bindings
@@ -107,11 +111,16 @@ function jwtConfig(env: Env): JwtVerifierConfig {
   return { publicKey: env.AUTH_JWT_PUBLIC_KEY, issuer: env.AUTH_JWT_ISSUER }
 }
 
-async function resolveAuth(req: Request, env: Env): Promise<VerifyResult | null> {
+async function resolveAuth(
+  req: Request,
+  env: Env,
+): Promise<{ result: VerifyResult; token: string } | null> {
   const header = req.headers.get('Authorization')
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null
   if (!token) return null
-  return (await verifyJwt(jwtConfig(env), token)).result
+  const { result } = await verifyJwt(jwtConfig(env), token)
+  if (!result) return null
+  return { result, token }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,14 +215,13 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
 
   // Pick the JWT whose subject is the user we want billed:
   //   - developer-billed → the app owner (via APP_OWNER_JWT)
-  //   - user-billed      → the caller (forward their Bearer token)
+  //   - user-billed      → the caller (forward their verified Bearer token)
   // The api-worker bills the JWT subject; it does not accept any
   // client-supplied billing override.
   if (billingMode === 'developer') {
     headers['Authorization'] = `Bearer ${c.env.APP_OWNER_JWT}`
-  } else {
-    const token = c.req.header('Authorization')?.slice(7)
-    if (token) headers['Authorization'] = `Bearer ${token}`
+  } else if (auth) {
+    headers['Authorization'] = `Bearer ${auth.token}`
   }
 
   const hasBody = c.req.method !== 'GET' && c.req.method !== 'HEAD'
@@ -290,9 +298,8 @@ app.post('/api/actions/:name', async (c) => {
   const action = actions[name]
   if (!action) return c.json({ error: 'Action not found' }, 404)
   const params = await c.req.json<Record<string, unknown>>()
-  const callerJwt = c.req.header('Authorization')!.slice(7)
-  const tools = createActionTools(c.env, auth.userId, callerJwt)
-  const result = await action({ userId: auth.userId, params, tools })
+  const tools = createActionTools(c.env, auth.result.userId, auth.token)
+  const result = await action({ userId: auth.result.userId, params, tools })
   return c.json(result as unknown as Record<string, unknown>)
 })
 
@@ -300,38 +307,270 @@ app.post('/api/actions/:name', async (c) => {
 // AI chat — multi-turn tool-use via Vercel AI SDK + DeepSpace proxy
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Context-management helpers for /api/ai/chat
+// ---------------------------------------------------------------------------
+
+/**
+ * Keep full tool results for this many most-recent assistant turns. Older
+ * tool-invocation results get their payload replaced with a small marker,
+ * which massively reduces input tokens on long sessions where the agent
+ * called tools that returned large blobs (e.g. records_get on a 20KB file).
+ * The agent can always re-fetch if it actually needs the data.
+ */
+const KEEP_RECENT_TOOL_RESULTS = 5
+
+/**
+ * Hard cap on total message-history character count before sliding-window
+ * trimming kicks in. ~4 chars per token × 240K chars ≈ 60K input tokens from
+ * history alone. Well under every supported model's context window.
+ */
+const HISTORY_CHAR_CAP = 240_000
+
+/**
+ * Don't trim below this many messages — preserves a floor of recent context
+ * even if a single turn blew past the cap.
+ */
+const MIN_KEPT_MESSAGES = 10
+
+/**
+ * Max bytes of a single tool invocation's result that we'll hand back to the
+ * model. A records.query with no `where` can easily return hundreds of KB;
+ * feeding that into the next step's prompt destroys the context budget and
+ * slows every subsequent turn. When exceeded, we return a truncation marker
+ * with guidance to narrow the query.
+ */
+const TOOL_RESULT_BYTE_CAP = 30_000
+
+/**
+ * When the agent creates an agentEdits row with action="update", we look up
+ * the target projectFiles record and snapshot its current agentRevision as
+ * `baseAgentRevision` on the edit. The processor compares this against the
+ * live revision at apply time; a mismatch means something wrote to the file
+ * between the agent reading and the agent applying, and the edit is
+ * rejected as a conflict rather than clobbering.
+ *
+ * This is a best-effort interception — if the lookup fails (e.g. file not
+ * found by path), we let the edit through without a base; the processor's
+ * existing "file not found" branch handles that case.
+ */
+async function maybeInjectAgentEditRevision(
+  toolName: string,
+  params: Record<string, unknown>,
+  exec: (t: string, p: Record<string, unknown>) => Promise<unknown>,
+): Promise<Record<string, unknown>> {
+  if (toolName !== 'records.create') return params
+  const collection = params.collection
+  const data = params.data as Record<string, unknown> | undefined
+  if (collection !== 'agentEdits' || !data) return params
+  if (data.action !== 'update') return params
+  if (typeof data.filePath !== 'string' || typeof data.documentId !== 'string') return params
+  if ('baseAgentRevision' in data) return params
+
+  const query = (await exec('records.query', {
+    collection: 'projectFiles',
+    where: { documentId: data.documentId },
+    limit: 500,
+  })) as { success?: boolean; data?: { records?: Array<{ data: { path?: string; agentRevision?: number; deletedAt?: number } }> } }
+
+  if (!query.success || !query.data?.records) return params
+  const normalized = data.filePath.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
+  const match = query.data.records.find((r) => {
+    const p = (r.data.path ?? '').replace(/\\/g, '/').split('/').filter(Boolean).join('/')
+    return p === normalized && !r.data.deletedAt
+  })
+  if (!match) return params
+
+  return {
+    ...params,
+    data: { ...data, baseAgentRevision: String(match.data.agentRevision ?? 0) },
+  }
+}
+
+function capToolResultSize(result: unknown): unknown {
+  let serialized: string
+  try {
+    serialized = JSON.stringify(result)
+  } catch {
+    return { success: false, error: 'Tool result could not be serialized.' }
+  }
+  if (serialized.length <= TOOL_RESULT_BYTE_CAP) return result
+  return {
+    success: false,
+    truncated: true,
+    error:
+      `Tool result exceeded ${TOOL_RESULT_BYTE_CAP} bytes (was ${serialized.length}). ` +
+      `Retry with a narrower query (e.g. add a \`where\` filter, reduce \`limit\`, ` +
+      `or call records.get for a single record).`,
+    preview: serialized.slice(0, 2_000),
+  }
+}
+
+type ChatTurn = {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  parts?: Array<unknown>
+}
+
+/**
+ * Walk message history and replace the `result` payload of tool-invocation
+ * parts in OLDER assistant messages with a small marker. Errors (success=false)
+ * are preserved as-is — they're small and useful for the agent's reasoning.
+ */
+function truncateOldToolResults(messages: ChatTurn[], keepLast: number): ChatTurn[] {
+  // Find the index of the first assistant message we want to protect — anything
+  // before that gets its tool results truncated.
+  const assistantIdxs: number[] = []
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === 'assistant') assistantIdxs.push(i)
+  }
+  const protectedStart = assistantIdxs.length > keepLast
+    ? assistantIdxs[assistantIdxs.length - keepLast]
+    : 0
+
+  return messages.map((msg, idx) => {
+    if (msg.role !== 'assistant' || idx >= protectedStart) return msg
+    if (!Array.isArray(msg.parts) || msg.parts.length === 0) return msg
+    const newParts = msg.parts.map((p) => {
+      if (!p || typeof p !== 'object') return p
+      const anyP = p as Record<string, unknown>
+      if (anyP.type !== 'tool-invocation') return p
+      const inv = anyP.toolInvocation as Record<string, unknown> | undefined
+      if (!inv || inv.state !== 'result') return p
+      const result = inv.result as Record<string, unknown> | undefined
+      // Preserve errors — they're small and the agent may need to retry.
+      if (result && result.success === false) return p
+      return {
+        ...anyP,
+        toolInvocation: {
+          ...inv,
+          result: {
+            _truncated: true,
+            note: 'Result from an earlier turn omitted to save context. Call this tool again if you need the data.',
+          },
+        },
+      }
+    })
+    return { ...msg, parts: newParts }
+  })
+}
+
+/**
+ * Drop oldest messages until total character count is under `charCap`,
+ * preserving at least `minKept` messages at the tail.
+ */
+function applySlidingWindow(messages: ChatTurn[], charCap: number, minKept: number): ChatTurn[] {
+  const sizeOf = (m: ChatTurn): number => {
+    const text = (m.content ?? '') + (m.parts ? JSON.stringify(m.parts) : '')
+    return text.length
+  }
+  let total = messages.reduce((acc, m) => acc + sizeOf(m), 0)
+  if (total <= charCap) return messages
+  const out = [...messages]
+  while (out.length > minKept && total > charCap) {
+    const dropped = out.shift()
+    if (!dropped) break
+    total -= sizeOf(dropped)
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+
 app.post('/api/ai/chat', async (c) => {
   const auth = await resolveAuth(c.req.raw, c.env)
   if (!auth) return c.json({ error: 'Unauthorized' }, 401)
 
-  const { messages } = await c.req.json<{ messages: Array<{ role: string; content: string }> }>()
+  // The client passes documentId + activeFilePath + the LIVE buffer of the
+  // active file so the worker can inject fresh project state into the system
+  // prompt each turn. Sending activeFileContent from the client bypasses the
+  // ~2s debounce on plainContent writes — the agent sees what's on screen
+  // right now, not a stale DB copy. See docs/ai-chat/architecture.md.
+  const body = await c.req.json<{
+    messages: ChatTurn[]
+    documentId?: string
+    activeFilePath?: string | null
+    activeFileContent?: string | null
+    modelId?: string | null
+  }>()
+  const { messages: rawMessages, documentId, activeFilePath, activeFileContent, modelId } = body
+  const messages = rawMessages
+
   if (!Array.isArray(messages) || messages.length === 0) {
     return c.json({ error: 'messages array is required' }, 400)
   }
+  if (!documentId || typeof documentId !== 'string') {
+    return c.json({ error: 'documentId is required in the request body' }, 400)
+  }
 
-  const jwt = c.req.header('Authorization')!.slice(7)
+  // Validate modelId against the catalog. Never pass a raw client string to
+  // the provider — could be a malicious or nonexistent id. The resolved model
+  // also carries the provider name, so we route to the right DeepSpace AI
+  // factory below.
+  const resolvedModel = resolveModel(modelId)
 
-  const anthropic = createDeepSpaceAI(c.env, 'anthropic', { authToken: jwt })
+  // Load project state under the caller's RBAC. Fresh per turn — no caching.
+  const context = await loadContext(
+    c.env,
+    auth.result.userId,
+    documentId,
+    activeFilePath ?? null,
+    typeof activeFileContent === 'string' ? activeFileContent : undefined,
+  )
 
-  // Read-only tools that execute against the app's RecordRoom DO
-  const scopeId = `app:${c.env.APP_NAME}`
-  const tools = buildReadOnlyTools(async (toolName, params) => {
+  // Provider picked from the resolved model — one of anthropic / openai /
+  // cerebras. All three route through the DeepSpace proxy and bill the JWT
+  // subject, so per-user billing is unchanged regardless of choice.
+  const providerFactory = createDeepSpaceAI(c.env, resolvedModel.provider, { authToken: auth.token })
+
+  // Tools execute against the app's RecordRoom DO. Scope matches the
+  // frontend's <RecordScope roomId={SCOPE_ID}> so agent-created records
+  // appear in the user's live useQuery subscription.
+  const scopeId = makeScopeId(c.env.APP_NAME)
+  const callerUserId = auth.result.userId
+
+  async function execTool(toolName: string, params: Record<string, unknown>): Promise<unknown> {
     const doId = c.env.RECORD_ROOMS.idFromName(scopeId)
     const stub = c.env.RECORD_ROOMS.get(doId)
+    // userId MUST be in the body — handleToolExecute reads it from there, not
+    // from headers. See docs/ai-chat/gotchas.md #1.
     const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': auth.userId },
-      body: JSON.stringify({ tool: toolName, params }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: toolName, params, userId: callerUserId }),
     }))
     return res.json()
+  }
+
+  const tools = buildChatTools(async (toolName, params) => {
+    const augmented = await maybeInjectAgentEditRevision(toolName, params, execTool)
+    const payload = await execTool(toolName, augmented)
+    return capToolResultSize(payload)
   })
 
+  // Context management: strip bulky tool result payloads from old turns,
+  // then apply a sliding-window safety cap. Both are no-ops on short
+  // sessions; kick in on long ones to keep cost bounded and avoid
+  // context-window overflow on cheaper models.
+  const processedMessages = applySlidingWindow(
+    truncateOldToolResults(messages, KEEP_RECENT_TOOL_RESULTS),
+    HISTORY_CHAR_CAP,
+    MIN_KEPT_MESSAGES,
+  )
+
   const result = streamText({
-    model: anthropic('claude-sonnet-4-20250514'),
-    system: buildSystemPrompt(c.env.APP_NAME, schemas),
-    messages,
+    // Provider factories return a V1|V2 union; streamText's types expect V1.
+    // At runtime all the providers we ship are V1-compatible.
+    model: providerFactory(resolvedModel.id) as LanguageModelV1,
+    system: buildLatexSystemPrompt(context),
+    messages: processedMessages,
     tools,
-    maxSteps: 5,
+    // Rich context means most turns resolve in 1–3 tool calls. maxSteps: 20
+    // stays as a ceiling for legitimate multi-file edits.
+    maxSteps: 20,
+    // Cancel the upstream provider call when the HTTP client disconnects
+    // (tab close, navigation, or explicit `stop()` from useChat).
+    abortSignal: c.req.raw.signal,
     onError: ({ error }) => {
       console.error('[ai-chat] streamText error:', error)
     },
@@ -351,7 +590,7 @@ app.post('/api/ai/chat', async (c) => {
 
 app.all('/api/files/*', async (c) => {
   const auth = await resolveAuth(c.req.raw, c.env)
-  const userId = auth?.userId ?? null
+  const userId = auth?.result.userId ?? null
 
   const url = new URL(c.req.url)
   const platformUrl = new URL(c.req.url)
@@ -423,17 +662,16 @@ app.get('*', async (c) => {
 // =============================================================================
 
 function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
-  const scopeId = `app:${env.APP_NAME}`
+  const scopeId = makeScopeId(env.APP_NAME)
 
   async function execTool(tool: string, params: Record<string, unknown>): Promise<ActionResult> {
     const doId = env.RECORD_ROOMS.idFromName(scopeId)
     const stub = env.RECORD_ROOMS.get(doId)
-    const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
+    const res = await stub.fetch(new Request('https://internal/api/tools/execute?appAction=true', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-user-id': userId,
-        'x-app-action': 'true',
       },
       body: JSON.stringify({ tool, params }),
     }))

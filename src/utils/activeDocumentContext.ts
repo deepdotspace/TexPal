@@ -7,7 +7,6 @@ export interface ActiveDocumentContextRecord {
     userId?: string
     activeDocumentId?: string
     activeDocumentTitle?: string
-    teamId?: string
     activeFilePath?: string
     updatedAt?: number
   }

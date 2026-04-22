@@ -8,14 +8,12 @@ import {
 export interface ActiveDocumentContextValue {
   activeDocumentId: string
   activeDocumentTitle: string
-  teamId: string
   activeFilePath: string
 }
 
 const EMPTY_ACTIVE_DOCUMENT_CONTEXT: ActiveDocumentContextValue = {
   activeDocumentId: '',
   activeDocumentTitle: '',
-  teamId: '',
   activeFilePath: '',
 }
 
@@ -28,7 +26,6 @@ function hasMatchingContext(
   return (
     (record.data.activeDocumentId || '') === nextContext.activeDocumentId &&
     (record.data.activeDocumentTitle || '') === nextContext.activeDocumentTitle &&
-    (record.data.teamId || '') === nextContext.teamId &&
     (record.data.activeFilePath || '') === nextContext.activeFilePath
   )
 }
@@ -99,7 +96,6 @@ export function useActiveDocumentContext() {
     const payload = {
       activeDocumentId: nextContext.activeDocumentId,
       activeDocumentTitle: nextContext.activeDocumentTitle,
-      teamId: nextContext.teamId,
       activeFilePath: nextContext.activeFilePath,
       updatedAt: Date.now(),
     }

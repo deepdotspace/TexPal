@@ -5,8 +5,11 @@
 /** App name */
 export const APP_NAME = 'latex-editor'
 
-/** Primary scope ID for the app's RecordRoom DO */
-export const SCOPE_ID = `app:${APP_NAME}`
+/** Compute the scope ID for an app's RecordRoom DO. Shared between client and worker. */
+export const makeScopeId = (appName: string) => `app:${appName}`
+
+/** Primary scope ID for the app's RecordRoom DO (client-side — uses the build-time APP_NAME). */
+export const SCOPE_ID = makeScopeId(APP_NAME)
 
 /** Roles and display config — imported from SDK (single source of truth) */
 export { ROLES, ROLE_CONFIG, type Role } from 'deepspace'
