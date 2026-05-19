@@ -231,7 +231,9 @@ export function UploadDialog({
 
         const rootEntry = getEntry()
         if (!rootEntry) continue
-        const nestedFiles = await walkWebkitEntry(rootEntry, '')
+        // FileSystemEntry from the DOM lacks the webkit-only `createReader`
+        // type but supports it at runtime — cast for the legacy walker.
+        const nestedFiles = await walkWebkitEntry(rootEntry as unknown as Parameters<typeof walkWebkitEntry>[0], '')
         droppedFiles.push(...nestedFiles)
       }
       appendToQueue(droppedFiles)

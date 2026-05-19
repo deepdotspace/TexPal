@@ -141,8 +141,8 @@ function collectFilePaths(dir: { type: string; name: string; files?: any[] }, pr
 async function fetchManifest(): Promise<{ type: string; name: string; files?: any[] }[]> {
   const res = await fetch(LATEX_DATA_API)
   if (!res.ok) throw new Error(`Failed to fetch manifest: ${res.status}`)
-  const data = await res.json()
-  return data.files || []
+  const data = (await res.json()) as { files?: { type: string; name: string; files?: any[] }[] }
+  return data.files ?? []
 }
 
 /** Fetch text file content from CDN */

@@ -16,7 +16,6 @@ export function TrashPanel({
   trashFiles,
   onRestore,
   onPermanentlyDelete,
-  onEmptyTrash,
   getBaseName,
 }: TrashPanelProps) {
   const [expanded, setExpanded] = useState(false)

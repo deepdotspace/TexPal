@@ -27,7 +27,6 @@ import {
   RecordRoom as RecordRoomBase,
   YjsRoom as YjsRoomBase,
   CanvasRoom as CanvasRoomBase,
-  MediaRoom as MediaRoomBase,
   PresenceRoom as PresenceRoomBase,
 } from 'deepspace/worker'
 import type { ActionTools, ActionResult, DOManifest, DOBindings } from 'deepspace/worker'
@@ -50,7 +49,6 @@ export const __DO_MANIFEST__ = [
   { binding: 'RECORD_ROOMS', className: 'RecordRoom', sqlite: true },
   { binding: 'YJS_ROOMS', className: 'YjsRoom', sqlite: true },
   { binding: 'CANVAS_ROOMS', className: 'CanvasRoom', sqlite: true },
-  { binding: 'MEDIA_ROOMS', className: 'MediaRoom', sqlite: true },
   { binding: 'PRESENCE_ROOMS', className: 'PresenceRoom', sqlite: true },
 ] as const satisfies DOManifest
 
@@ -66,7 +64,6 @@ export class RecordRoom extends RecordRoomBase {
 
 export class YjsRoom extends YjsRoomBase {}
 export class CanvasRoom extends CanvasRoomBase {}
-export class MediaRoom extends MediaRoomBase {}
 export class PresenceRoom extends PresenceRoomBase {}
 
 // =============================================================================
@@ -276,8 +273,6 @@ app.get('/ws/yjs/:docId', wsRoute((env) => env.YJS_ROOMS, () => ({ role: 'member
 
 app.get('/ws/canvas/:docId', wsRoute((env) => env.CANVAS_ROOMS, () => ({ role: 'member' })))
 
-app.get('/ws/media/:roomId', wsRoute((env) => env.MEDIA_ROOMS, () => ({ role: 'member' })))
-
 app.get('/ws/presence/:scopeId', wsRoute(
   (env) => env.PRESENCE_ROOMS,
   (auth) => ({
@@ -299,7 +294,13 @@ app.post('/api/actions/:name', async (c) => {
   if (!action) return c.json({ error: 'Action not found' }, 404)
   const params = await c.req.json<Record<string, unknown>>()
   const tools = createActionTools(c.env, auth.result.userId, auth.token)
-  const result = await action({ userId: auth.result.userId, params, tools })
+  const result = await action({
+    userId: auth.result.userId,
+    params,
+    tools,
+    env: c.env as unknown as Record<string, unknown>,
+    callerJwt: auth.token,
+  })
   return c.json(result as unknown as Record<string, unknown>)
 })
 
@@ -664,7 +665,14 @@ app.get('*', async (c) => {
 function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
   const scopeId = makeScopeId(env.APP_NAME)
 
-  async function execTool(tool: string, params: Record<string, unknown>): Promise<ActionResult> {
+  // Generic over the data shape so callers below get precise ActionResult<T>
+  // back instead of the wide unknown — the new SDK tightened ActionTools'
+  // method signatures and the cast at the boundary is safe because the wire
+  // shape is set by the SDK's tools-api handler.
+  async function execTool<TData>(
+    tool: string,
+    params: Record<string, unknown>,
+  ): Promise<ActionResult<TData>> {
     const doId = env.RECORD_ROOMS.idFromName(scopeId)
     const stub = env.RECORD_ROOMS.get(doId)
     const res = await stub.fetch(new Request('https://internal/api/tools/execute?appAction=true', {
@@ -675,10 +683,13 @@ function createActionTools(env: Env, userId: string, callerJwt: string): ActionT
       },
       body: JSON.stringify({ tool, params }),
     }))
-    return res.json() as Promise<ActionResult>
+    return res.json() as Promise<ActionResult<TData>>
   }
 
-  async function callIntegration(endpoint: string, data?: unknown): Promise<ActionResult> {
+  async function callIntegration<T = unknown>(
+    endpoint: string,
+    data?: unknown,
+  ): Promise<ActionResult<T>> {
     const integrationName = endpoint.split('/')[0]
     const billingMode = integrations[integrationName]?.billing ?? 'developer'
 
@@ -694,16 +705,19 @@ function createActionTools(env: Env, userId: string, callerJwt: string): ActionT
       },
       body: data != null ? JSON.stringify(data) : undefined,
     })
-    return res.json() as Promise<ActionResult>
+    return res.json() as Promise<ActionResult<T>>
   }
 
   return {
-    create: (sid, collection, data) => execTool('records.create', { scopeId: sid, collection, data }),
-    update: (sid, collection, recordId, data) => execTool('records.update', { scopeId: sid, collection, recordId, data }),
-    remove: (sid, collection, recordId) => execTool('records.delete', { scopeId: sid, collection, recordId }),
-    get: (sid, collection, recordId) => execTool('records.get', { scopeId: sid, collection, recordId }),
-    query: (sid, collection, options) => execTool('records.query', { scopeId: sid, collection, ...options }),
+    create: (collection, data) => execTool('records.create', { collection, data }),
+    update: (collection, recordId, data) =>
+      execTool('records.update', { collection, recordId, data }),
+    remove: (collection, recordId) => execTool('records.delete', { collection, recordId }),
+    get: (collection, recordId) => execTool('records.get', { collection, recordId }),
+    query: (collection, options) => execTool('records.query', { collection, ...options }),
     integration: callIntegration,
+    registerUser: (opts) =>
+      execTool('users.register', { userId: opts.userId ?? userId, ...opts }),
   }
 }
 

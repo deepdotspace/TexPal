@@ -54,7 +54,7 @@ export interface CursorPosition {
 }
 
 interface UseCodeMirrorOptions {
-  parentRef: RefObject<HTMLDivElement>
+  parentRef: RefObject<HTMLDivElement | null>
   initialDoc: string
   onChange: (value: string) => void
   onCursorChange?: (pos: CursorPosition) => void

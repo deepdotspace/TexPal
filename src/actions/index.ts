@@ -1,5 +1,4 @@
 import type { ActionHandler } from 'deepspace/worker'
-import { APP_NAME, makeScopeId } from '../constants'
 
 /**
  * deleteDocument — cascading delete for a document and all its child records.
@@ -18,10 +17,6 @@ const deleteDocument: ActionHandler = async ({ params, tools }) => {
   if (typeof documentId !== 'string' || !documentId) {
     return { success: false, error: 'documentId is required' }
   }
-  // The action handler doesn't receive env; the scope is deterministic from
-  // the build-time APP_NAME (which must match the runtime env var — enforced
-  // by being a single source of truth in src/constants.ts).
-  const scopeId = makeScopeId(APP_NAME)
 
   const cascadeCollections = [
     'projectFiles',
@@ -31,13 +26,13 @@ const deleteDocument: ActionHandler = async ({ params, tools }) => {
   ] as const
 
   for (const collection of cascadeCollections) {
-    const result = await tools.query(scopeId, collection, { where: { documentId }, limit: 500 })
+    const result = await tools.query(collection, { where: { documentId }, limit: 500 })
     if (!result.success) {
       return { success: false, error: `Failed to query ${collection}: ${result.error ?? 'unknown'}` }
     }
     const records = (result.data as { records?: Array<{ recordId: string }> } | undefined)?.records ?? []
     for (const record of records) {
-      const removal = await tools.remove(scopeId, collection, record.recordId)
+      const removal = await tools.remove(collection, record.recordId)
       if (!removal.success) {
         return {
           success: false,
@@ -47,12 +42,12 @@ const deleteDocument: ActionHandler = async ({ params, tools }) => {
     }
   }
 
-  const docRemoval = await tools.remove(scopeId, 'documents', documentId)
+  const docRemoval = await tools.remove('documents', documentId)
   if (!docRemoval.success) {
     return { success: false, error: `Failed to remove document: ${docRemoval.error ?? 'unknown'}` }
   }
 
-  return { success: true }
+  return { success: true, data: { deleted: documentId } }
 }
 
 export const actions: Record<string, ActionHandler> = {

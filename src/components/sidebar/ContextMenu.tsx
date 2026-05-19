@@ -5,9 +5,11 @@
 import React, { useEffect, useRef } from 'react'
 
 export interface ContextMenuItem {
-  label: string
+  /** Required for normal items; omit for separator rows. */
+  label?: string
   icon?: React.ReactNode
-  onClick: () => void
+  /** Required for normal items; omit for separator rows. */
+  onClick?: () => void
   disabled?: boolean
   danger?: boolean
   separator?: boolean
@@ -89,7 +91,7 @@ export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
                   : 'text-content-secondary hover:bg-black/[0.04]'
             }`}
             onClick={() => {
-              if (!item.disabled) {
+              if (!item.disabled && item.onClick) {
                 item.onClick()
                 onClose()
               }

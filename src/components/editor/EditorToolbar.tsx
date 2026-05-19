@@ -15,7 +15,7 @@ import { Dropdown } from '../ui/Dropdown'
 
 const TOOLTIP_DELAY = 250
 
-function Tooltip({ text, children }: { text: string; children: React.ReactElement }) {
+function Tooltip({ text, children }: { text: string; children: React.ReactElement<React.HTMLAttributes<HTMLElement>> }) {
   const [visible, setVisible] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)

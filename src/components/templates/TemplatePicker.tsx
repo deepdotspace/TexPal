@@ -475,7 +475,7 @@ export function TemplatePicker({
           }} disabled={isRenaming}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleRenameConfirm} loading={isRenaming} disabled={!renameTitle.trim()}>
+          <Button variant="default" onClick={handleRenameConfirm} loading={isRenaming} disabled={!renameTitle.trim()}>
             Rename
           </Button>
         </Modal.Footer>
@@ -490,7 +490,7 @@ export function TemplatePicker({
         description="Are you sure you want to delete this document? This action cannot be undone."
         confirmText="Delete"
         cancelText="Cancel"
-        variant="danger"
+        variant="destructive"
         loading={isDeleting}
       />
     </div>
