@@ -1,4 +1,4 @@
-name = "latex-editor"
+name = "texpal"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 main = "worker.ts"
@@ -26,7 +26,7 @@ binding = "FILES"
 bucket_name = "auto"
 
 [vars]
-APP_NAME = "latex-editor"
+APP_NAME = "texpal"
 
 [dev]
 port = 8780

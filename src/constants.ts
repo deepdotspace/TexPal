@@ -3,7 +3,7 @@
  */
 
 /** App name */
-export const APP_NAME = 'latex-editor'
+export const APP_NAME = 'texpal'
 
 /** Compute the scope ID for an app's RecordRoom DO. Shared between client and worker. */
 export const makeScopeId = (appName: string) => `app:${appName}`

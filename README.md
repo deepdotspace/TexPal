@@ -2,6 +2,8 @@
 
 A collaborative LaTeX editor built with the [DeepSpace SDK](https://github.com/deepdotspace).
 
+**Live: [texpal.app.space](https://texpal.app.space)**
+
 ## Features
 
 - Real-time LaTeX editing with CodeMirror 6
@@ -22,5 +24,5 @@ npm run dev
 ## Deployment
 
 ```bash
-npx deepspace deploy
+npm run deploy
 ```
