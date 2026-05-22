@@ -533,12 +533,17 @@ app.post('/api/ai/chat', async (c) => {
   async function execTool(toolName: string, params: Record<string, unknown>): Promise<unknown> {
     const doId = c.env.RECORD_ROOMS.idFromName(scopeId)
     const stub = c.env.RECORD_ROOMS.get(doId)
-    // userId MUST be in the body — handleToolExecute reads it from there, not
-    // from headers. See docs/ai-chat/gotchas.md #1.
+    // userId goes in the X-User-Id header. The DO's tool executor used to read
+    // it from the JSON body (pre-0.3.x); the migration moved identity to the
+    // header to match the WS / /api/* identity-strip security model. Sending
+    // it in the body silently degrades to anonymous and RBAC returns nothing.
     const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: toolName, params, userId: callerUserId }),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': callerUserId,
+      },
+      body: JSON.stringify({ tool: toolName, params }),
     }))
     return res.json()
   }

@@ -61,6 +61,10 @@ export interface ContextLoaderEnv {
  * Call the RecordRoom DO's tools endpoint with the caller's userId so RBAC
  * is enforced. Mirrors the chat tool executor — using the same transport for
  * both means we share the same auth model and the same bug surface.
+ *
+ * userId travels in the X-User-Id header (post-0.3.x SDK contract). Sending
+ * it in the body — as we did during the 0.3.10 migration — silently routed
+ * every call as anonymous and made RBAC return zero rows.
  */
 async function callTool(
   env: ContextLoaderEnv,
@@ -73,8 +77,11 @@ async function callTool(
   const stub = env.RECORD_ROOMS.get(doId)
   const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tool, params, userId }),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-User-Id': userId,
+    },
+    body: JSON.stringify({ tool, params }),
   }))
   return res.json() as Promise<{ success: boolean; data?: unknown; error?: string }>
 }
