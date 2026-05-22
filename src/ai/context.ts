@@ -136,6 +136,21 @@ export async function loadContext(
   const rawFiles = extractRecords<ProjectFileRecord>(filesRes)
   const liveFiles = rawFiles.filter((r) => !r.data.deletedAt)
 
+  // Diagnostic surface for "AI confidently claimed the project is empty"
+  // bug reports. We can't tail logs from the SDK surface, but Cloudflare
+  // captures console output and the user can also relay this if asked.
+  if (liveFiles.length === 0 && !filesLoadError) {
+    console.error('[loadContext] zero-files snapshot', {
+      userId,
+      documentId,
+      activeFilePath,
+      rawRecordCount: rawFiles.length,
+      // rawRecordCount > 0 + liveFiles == 0 means everything was soft-deleted.
+      // rawRecordCount == 0 means either truly empty OR RBAC silently filtered
+      // (read:'own' returning [] when createdBy doesn't match userId).
+    })
+  }
+
   // Pick which file's content to inline. Prefer the client-declared active
   // file; fall back to the entry file; if neither exists, skip.
   const active = activeFilePath

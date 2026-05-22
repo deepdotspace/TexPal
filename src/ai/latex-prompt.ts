@@ -57,7 +57,15 @@ Issue them as separate agentEdits rows. They are processed in creation order. Wh
 
 Keep replies short. When you make edits, briefly state what changed in which files and stop — the user sees the result in the editor. Don't paste back large file content unless explicitly asked.
 
-If PROJECT STATE shows no documentId or no active file, ask the user what they want to create before emitting tool calls.`
+If PROJECT STATE shows no documentId or no active file, ask the user what they want to create before emitting tool calls.
+
+## When the file list looks empty
+
+If PROJECT STATE lists zero files but the user clearly references existing content in their editor (e.g. "remove the X position"), do NOT confidently say the project is empty. The most likely causes:
+- The project is still initializing from a template (race during navigation).
+- A context-load issue meant your view of the project differs from the editor's view.
+
+In that case: tell the user plainly that the chat doesn't see any files for this document right now, ask them to reload the page or wait a moment, and offer to retry. Do not emit any agentEdits writes — a write at this point could create a duplicate of a file you simply couldn't see.`
 
 export function buildLatexSystemPrompt(ctx: ChatContext): string {
   return `${STATIC_RULES}\n\n${formatProjectState(ctx)}`
@@ -83,7 +91,9 @@ function formatProjectState(ctx: ChatContext): string {
   lines.push('')
   lines.push(`Files (${ctx.files.length}):`)
   if (ctx.files.length === 0 && !ctx.filesLoadError) {
-    lines.push('  (project has no files yet)')
+    lines.push('  (no files visible in this snapshot)')
+    lines.push('  ⚠ This may be a freshly-created project with no files yet, OR a sync race where files exist but were not loaded for this turn.')
+    lines.push('  ⚠ Do NOT confidently tell the user their project is empty. If they reference existing content, ask them to reload and try again. Do NOT emit any agentEdits writes — a write here could duplicate a file you cannot see.')
   } else if (ctx.files.length === 0) {
     lines.push('  (unavailable — see CONTEXT LOAD ERROR above)')
   } else {
