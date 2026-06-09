@@ -2,37 +2,20 @@ import { test, expect } from '@playwright/test'
 import { captureConsoleErrors } from './helpers/errors'
 
 /**
- * Wait for the React app to mount. The app shows either:
- * - "Loading..." while auth initializes
- * - The navigation bar once ready
+ * Smoke tests run against `/`, which renders the public landing page
+ * (signed-in users who have already seen it are redirected to /home).
  */
-async function waitForApp(page: import('@playwright/test').Page) {
-  await page.waitForSelector('[data-testid="app-navigation"]', { timeout: 15000 })
-}
-
 test.describe('Smoke tests', () => {
-  test('app loads without JS errors', async ({ page }) => {
+  test('landing page loads without JS errors', async ({ page }) => {
     const errors = captureConsoleErrors(page)
     await page.goto('/')
-    await waitForApp(page)
+    await expect(page.getByTestId('landing-page')).toBeVisible({ timeout: 15_000 })
     expect(errors).toEqual([])
   })
 
-  test('navigation is visible', async ({ page }) => {
-    await page.goto('/')
-    await waitForApp(page)
-    await expect(page.getByTestId('app-navigation')).toBeVisible()
-  })
-
-  test('sign-in button visible when logged out', async ({ page }) => {
-    await page.goto('/')
-    await waitForApp(page)
-    await expect(page.getByTestId('nav-sign-in-button')).toBeVisible()
-  })
-
-  test('unknown route shows 404', async ({ page }) => {
+  test('unknown route shows the 404 page', async ({ page }) => {
     await page.goto('/nonexistent-page-xyz')
-    await waitForApp(page)
-    await expect(page.locator('text=404')).toBeVisible()
+    await expect(page.getByText('404')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('Page not found')).toBeVisible()
   })
 })

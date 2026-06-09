@@ -206,7 +206,7 @@ export function TemplatePicker({
   }
 
   return (
-    <div className="relative flex-1 flex flex-col items-center p-6 pt-10 overflow-y-auto bg-surface dark:bg-dark-surface">
+    <div data-testid="home-page" className="relative flex-1 flex flex-col items-center p-6 pt-10 overflow-y-auto bg-surface dark:bg-dark-surface">
       {/* Theme Toggle - Top Right */}
       <div className="absolute top-4 right-4 z-10">
         <button

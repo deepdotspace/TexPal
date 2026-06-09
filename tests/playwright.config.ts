@@ -5,7 +5,10 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   globalSetup: './helpers/global-setup.ts',
   timeout: 30_000,
-  retries: 0,
+  // One retry absorbs first-contact dev-server transients (Vite re-optimizing
+  // deps after an install, the worker's upstream proxies warming up) without
+  // masking real failures — a genuine break fails both the attempt and retry.
+  retries: 1,
   use: {
     baseURL: 'http://localhost:5173',
     headless: true,

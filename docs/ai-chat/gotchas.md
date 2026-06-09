@@ -2,19 +2,17 @@
 
 Non-obvious things about the SDK that bit us, with the fix applied. Read this before editing `worker.ts`, `src/ai/context.ts`, `src/ai/latex-prompt.ts`, or `src/ai/tools.ts`.
 
-## 1. `userId` must be in the BODY of `/api/tools/execute`, not a header
+## 1. `userId` goes in the `X-User-Id` header, not the body
 
-`handleToolExecute` (`packages/deepspace/src/server/handlers/tools-api.ts:89`) reads `userId` from the request **body**:
+The caller's userId travels in the `X-User-Id` HTTP **header** on every call to `/api/tools/execute`. The `RecordRoom` DO reads it from that header to identify the caller, look up their role, and enforce the schema's `permissions` block (RBAC).
 
-```ts
-const { tool, params = {}, userId } = body
-```
+If you put the userId in the JSON body instead of the header, the DO sees no caller identity and silently degrades the request to anonymous — RBAC then returns zero rows (reads come back empty, writes are rejected) with no error. The failure is quiet, which makes it easy to misdiagnose.
 
-The starter template sent it as an `x-user-id` **header** instead, so the handler fell back to `userRole = 'viewer'` and every write was rejected. **Fix applied:** always include `userId` in the JSON body for `/api/tools/execute`. Both the chat tool executor and the context loader do this.
+**Contract:** always set `X-User-Id: <callerUserId>` as a header. Both the chat tool executor (`worker.ts` `execTool`) and the context loader (`src/ai/context.ts` `callTool`) do this.
 
 ## 2. `activeLatexDocId` is NOT part of the chat flow
 
-The original miyagi pattern had the agent `records_query` this collection every turn. Under the SDK, RBAC + timing made it flaky. The current architecture **does not use it for chat**. The client is source of truth for "what document is active" — it passes `documentId` and `activeFilePath` in the chat request body, and the worker injects them directly into the system prompt. The collection may still exist in the schema for other purposes (e.g. "restore last opened doc" across sessions) but the agent must not touch it.
+The prior implementation had the agent `records_query` this collection every turn. Under the SDK, RBAC + timing made it flaky. The current architecture **does not use it for chat**. The client is source of truth for "what document is active" — it passes `documentId` and `activeFilePath` in the chat request body, and the worker injects them directly into the system prompt. The collection may still exist in the schema for other purposes (e.g. "restore last opened doc" across sessions) but the agent must not touch it.
 
 If you see a prompt or tool that references `activeLatexDocId`, it's a regression.
 
@@ -61,7 +59,7 @@ Otherwise the model sees a conversation about doc A while the project state bloc
 
 ## 7. `agentEdits` does NOT use `teamId`
 
-The miyagi schema had `teamId` on every row. This app's `agentEdits` schema (`src/schemas/agent-edits-schema.ts`) does not declare it. Don't include it in the agent's payload — the DO will reject unknown fields.
+The original app's schema had `teamId` on every row. This app's `agentEdits` schema (`src/schemas/agent-edits-schema.ts`) does not declare it. Don't include it in the agent's payload — the DO will reject unknown fields.
 
 ## 8. Active file content comes from the CLIENT, not the DB
 

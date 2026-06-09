@@ -4,7 +4,7 @@ This file orients future Claude sessions to the repo. For feature-specific knowl
 
 ## What this app is
 
-**TeXPal** — a collaborative, AI-native LaTeX editor built on the DeepSpace SDK. Ported from a miyagi-era widget (`widget-latex-editor-LtxEdt0r`). Users write LaTeX in a CodeMirror editor, compile to PDF via a cloud compiler, and can ask an AI assistant to create/edit files for them — the assistant writes through an `agentEdits` pipeline that a client hook applies automatically.
+**TeXPal** — a collaborative, AI-native LaTeX editor built on the DeepSpace SDK. Ported to the SDK from an earlier implementation of the same app. Users write LaTeX in a CodeMirror editor, compile to PDF via a cloud compiler, and can ask an AI assistant to create/edit files for them — the assistant writes through an `agentEdits` pipeline that a client hook applies automatically.
 
 ## Architecture at a glance
 
@@ -12,7 +12,8 @@ This file orients future Claude sessions to the repo. For feature-specific knowl
 - **Routing**: `@generouted/react-router`. Root in `src/pages/_app.tsx`, pages under `src/pages/`.
 - **Real-time data**: `useQuery` / `useMutations` from `deepspace`; provider in `_app.tsx` via `<RecordProvider>` + `<RecordScope>`.
 - **Editor**: CodeMirror in `src/components/editor/`; `EditorLayout.tsx` composes the three panels (file tree sidebar | editor | PDF). `usePanelResize` handles horizontal resize state.
-- **Worker**: `worker.ts` at the repo root. Hono app. Routes: `/api/auth/*`, `/api/integrations/*`, `/api/actions/*`, `/api/ai/chat`, `/api/files/*`, `/ws/*`, `/internal/cron`.
+- **Worker**: `worker.ts` at the repo root. Hono app. Routes: `/api/auth/*`, `/api/integrations/*`, `/api/actions/*`, `/api/ai/chat`, `/api/files/*`, `/ws/*`.
+- **Cron**: tasks live in `src/cron.ts` as `tasks: CronTask[]` plus a `runTask(name, env)` dispatcher, run by a `CronRoom` Durable Object (not an HTTP route). The app currently defines no tasks.
 - **Schemas**: declared in `src/schemas/*.ts`, registered in `src/schemas.ts`, baked into `RecordRoom` at construction time.
 - **AI chat**: `/api/ai/chat` in `worker.ts` uses `createDeepSpaceAI` from `deepspace/worker` + `streamText` from `ai`. Tools defined in `src/ai/tools.ts`. Client UI lives in `src/components/ai-chat/`.
 - **Agent edits pipeline**: agent never writes files directly. It inserts rows into the `agentEdits` collection (`status='pending'`). `useAgentEditsProcessor` watches the collection and applies each edit to `projectFiles` (handles base64, agentRevision bumps, soft-delete). See `src/hooks/useAgentEditsProcessor.ts` and `src/schemas/agent-edits-schema.ts`.
@@ -41,10 +42,9 @@ Feature-level knowledge lives in `docs/`. These are wiki-style notes intended to
 
 - `docs/ai-chat/overview.md` — what the AI chat does end to end
 - `docs/ai-chat/architecture.md` — plumbing, request lifecycle, scope reasoning
-- `docs/ai-chat/agent-instructions.md` — the system prompt (ported from miyagi's agent-prompt.md)
+- `docs/ai-chat/agent-instructions.md` — the system prompt (ported from the original app's agent-prompt.md)
 - `docs/ai-chat/sidebar-ux.md` — UX decisions for the left chat sidebar
 - `docs/ai-chat/gotchas.md` — SDK quirks and fixes already applied
-- `docs/ai-chat/implementation-plan.md` — the original rollout plan (historical)
 
 ## Non-obvious conventions
 

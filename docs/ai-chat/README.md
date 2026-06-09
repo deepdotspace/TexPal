@@ -6,7 +6,7 @@ High-level summary of how TeXPal's AI chat works end to end. Read this first; fo
 
 A collapsible, resizable chat sidebar on the left edge of the editor. The user types natural language ("write me a homework on integration by parts", "remove the Research Assistant entry from my resume", "fix my compile errors") and the AI edits the LaTeX files directly. The editor reflects the change in real time; the user hits Compile and gets the PDF.
 
-The end-user experience is the same as the miyagi-era "AI-native widget" — what changed is where the plumbing lives.
+The end-user experience is the same as the prior implementation — what changed is where the plumbing lives.
 
 ## The two promises
 
@@ -58,7 +58,7 @@ User sees new LaTeX, hits Compile, gets PDF
 4. **Worker assembles the system prompt.** Static behavioral rules + a `PROJECT STATE` block containing: the document ID, active file path, every file with size + type + entry flag, the full `plainContent` of the active file (truncated if >80 KB), and the last compile's errors if it failed within the last 30 minutes.
 5. **Worker calls `streamText`.** `createDeepSpaceAI(env, 'anthropic', { authToken })` routes the LLM request through the DeepSpace proxy, billing the JWT subject. Tools are registered with Vercel AI SDK.
 6. **Model generates.** For most requests (single-file edits) it emits a response immediately plus one `records_create` tool call. For multi-file work it emits several.
-7. **Each tool call hits `/api/tools/execute`** on the same `RecordRoom` DO, with `userId` in the body. The DO enforces schema permissions — if the user can't create in `agentEdits`, the call fails and the model sees the error.
+7. **Each tool call hits `/api/tools/execute`** on the same `RecordRoom` DO, with `userId` in the `X-User-Id` header. The DO enforces schema permissions — if the user can't create in `agentEdits`, the call fails and the model sees the error.
 8. **Agent creates `agentEdits` rows** with `status: 'pending'` and an `action` of `update | create | rename | delete`.
 9. **Client sees the new row** via its live `useQuery('agentEdits')` subscription.
 10. **`useAgentEditsProcessor` applies it** to `projectFiles`: writes `plainContent`, bumps `agentRevision`, handles rename/delete, refuses to delete the entry file.
@@ -71,7 +71,7 @@ All state changes flow through the SDK's normal real-time channels — no custom
 
 ### Push context, don't let the agent fish for it
 
-The miyagi-era prompt told the agent: "query `activeLatexDocId` first to find the active doc, then query `projectFiles`…". Under the SDK this pattern fails because:
+The prior implementation's prompt told the agent: "query `activeLatexDocId` first to find the active doc, then query `projectFiles`…". Under the SDK this pattern fails because:
 - `activeLatexDocId` is `read: 'own'`-gated, so timing and ownership races produce empty results.
 - Every turn wastes 2–3 tool-call rounds rediscovering state the client already knows.
 
@@ -79,7 +79,7 @@ The current architecture eliminates that failure mode. The React component that 
 
 ### Keep the `agentEdits` pipeline
 
-`agentEdits` + `useAgentEditsProcessor` is not a miyagi crutch — it's load-bearing. The LaTeX editor has a dual-content architecture: files live as both `plainContent` (used for compilation) and a live Yjs buffer (used for real-time co-editing). The processor is what turns an agent-authored change into an atomic, reviewable mutation that the Yjs layer can rehydrate from cleanly. Writing directly via `yjs.setText` would bypass the entry-file protection, revision tracking, and batch handling that the processor provides.
+`agentEdits` + `useAgentEditsProcessor` is not a leftover from the prior implementation — it's load-bearing. The LaTeX editor has a dual-content architecture: files live as both `plainContent` (used for compilation) and a live Yjs buffer (used for real-time co-editing). The processor is what turns an agent-authored change into an atomic, reviewable mutation that the Yjs layer can rehydrate from cleanly. Writing directly via `yjs.setText` would bypass the entry-file protection, revision tracking, and batch handling that the processor provides.
 
 ### Tool surface is minimal
 
@@ -126,7 +126,7 @@ No caching. Every chat turn reloads project state from the DO. This is cheap (in
 ## Auth, RBAC, and billing
 
 - **Auth**: The client attaches a Bearer JWT (from `getAuthToken()`) on every chat request. `useChat`'s static `headers` can't do dynamic tokens, so we wrap `fetch`. The worker rejects missing/invalid tokens with 401.
-- **RBAC**: The worker forwards `userId: auth.userId` in the body of `/api/tools/execute` and `/api/tools/execute` for context loading. The DO reads `userId` from the body (a known SDK quirk — see gotchas.md #1), looks up the user's role in `c_users`, and enforces the schema's `permissions` block. No `?appAction=true` bypass.
+- **RBAC**: The worker forwards the caller's userId via the `X-User-Id` header on `/api/tools/execute`, both for tool calls and for context loading. The DO reads `userId` from that header (see gotchas.md #1), looks up the user's role in `c_users`, and enforces the schema's `permissions` block. No `?appAction=true` bypass.
 - **Billing**: `createDeepSpaceAI(env, 'anthropic', { authToken })` sends the user's JWT as `X-Auth-Token` on the upstream LLM call. The DeepSpace API proxy meters token usage and bills the JWT subject. Every chat turn is billed to the user who sent it.
 
 ## Edge cases handled
@@ -141,7 +141,7 @@ No caching. Every chat turn reloads project state from the DO. This is cheap (in
 - **Session expired mid-turn** — 401 surfaces as a red banner with a retry button.
 - **Tool call RBAC failure** — the model sees the structured error and can retry or explain to the user.
 
-## What came from miyagi, what's new, what's gone
+## What came from the original app, what's new, what's gone
 
 | | Status |
 |---|---|
@@ -154,12 +154,12 @@ No caching. Every chat turn reloads project state from the DO. This is cheap (in
 | `schema.list` / `user.current` tool exposure | **Dropped** — baked into the prompt or not needed. |
 | Resizable left sidebar UI | **New** — built on the app's existing `ResizeDivider` primitive; state persisted in localStorage. |
 | Server-side dynamic context loading per turn | **New** — `src/ai/context.ts`. |
-| Per-user JWT billing through the DeepSpace proxy | **New** (architecturally) — miyagi billed at the platform level. |
+| Per-user JWT billing through the DeepSpace proxy | **New** (architecturally) — the original app billed at the platform level. |
 
 ## Failure modes that are now structurally impossible
 
 - "You don't have a document open" when you do — the agent can't mis-read a collection that's no longer part of the loop.
-- Silent write rejection because `userId` didn't reach the DO — the `x-user-id`-as-header bug is fixed; `userId` is always in the body.
+- Silent write rejection because `userId` didn't reach the DO — the caller's userId is always sent in the `X-User-Id` header, so the DO can identify the caller and enforce RBAC.
 - Agent creating records in a different scope than the client subscribes to — same `SCOPE_ID` on both ends.
 - Stale context — no caching; every turn reloads state.
 
@@ -169,5 +169,4 @@ No caching. Every chat turn reloads project state from the DO. This is cheap (in
 - **The exact system prompt rules** → `agent-instructions.md` (keeps in sync with `src/ai/latex-prompt.ts`)
 - **Sidebar UX spec (collapse/expand, min/max widths, persistence)** → `sidebar-ux.md`
 - **SDK quirks and applied fixes** → `gotchas.md`
-- **Historical implementation plan** → `implementation-plan.md`
 - **Repo orientation for new Claude sessions** → `../../CLAUDE.md`

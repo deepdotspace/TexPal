@@ -12,6 +12,9 @@ export function captureConsoleErrors(page: Page): string[] {
       // Ignore known noise
       if (text.includes('__chromium_devtools_metrics_reporter')) return
       if (text.includes('favicon.ico')) return
+      // Vite dev-server transient: the dep optimizer 504s in-flight requests
+      // while it re-bundles (e.g. right after an install). Not an app error.
+      if (text.includes('Outdated Optimize Dep')) return
       errors.push(text)
     }
   })

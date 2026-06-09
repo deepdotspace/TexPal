@@ -43,9 +43,7 @@ export { CardGrid, GridCard } from './CardGrid'
 /* Feedback */
 export { Alert, AlertTitle, AlertDescription } from './Alert'
 export { ToastProvider, useToast } from './Toast'
-export {
-  EmptyState, EmptyItems, EmptySearch, EmptyDocuments, EmptyProjects, EmptyTeam, EmptyError,
-} from './EmptyState'
+export { EmptyState } from './EmptyState'
 
 /* Overlay */
 export {

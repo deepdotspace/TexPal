@@ -11,7 +11,7 @@ run_worker_first = ["/api/*", "/ws/*", "/internal/*", "/v1/*", "/_deepspace/*"]
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["RecordRoom", "YjsRoom", "CanvasRoom", "PresenceRoom"]
+new_sqlite_classes = ["RecordRoom", "YjsRoom", "CanvasRoom", "PresenceRoom", "CronRoom"]
 
 [durable_objects]
 bindings = [
@@ -19,6 +19,7 @@ bindings = [
   { name = "YJS_ROOMS", class_name = "YjsRoom" },
   { name = "CANVAS_ROOMS", class_name = "CanvasRoom" },
   { name = "PRESENCE_ROOMS", class_name = "PresenceRoom" },
+  { name = "CRON_ROOMS", class_name = "CronRoom" },
 ]
 
 [[r2_buckets]]
@@ -37,4 +38,3 @@ inspector_port = 9237
 #   AUTH_JWT_ISSUER
 #   AUTH_WORKER_URL
 #   OWNER_USER_ID
-#   INTERNAL_STORAGE_HMAC_SECRET

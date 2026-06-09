@@ -10,7 +10,7 @@
  *   - AI chat (Vercel AI SDK + DeepSpace proxy)
  *   - Server actions (app-defined, bypass user RBAC)
  *   - Scoped R2 file storage
- *   - HMAC-authenticated cron
+ *   - Scheduled cron tasks (CronRoom DO alarm)
  *   - Static asset serving with SPA fallback
  */
 
@@ -18,21 +18,23 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import {
   verifyJwt,
-  verifyInternalSignature,
-  buildInternalPayload,
   createDeepSpaceAI,
+  applySlidingWindow,
+  truncateOldToolResults,
+  capToolResultSize,
 } from 'deepspace/worker'
-import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
+import type { JwtVerifierConfig, VerifyResult, ChatTurn } from 'deepspace/worker'
 import {
   RecordRoom as RecordRoomBase,
   YjsRoom as YjsRoomBase,
   CanvasRoom as CanvasRoomBase,
   PresenceRoom as PresenceRoomBase,
+  CronRoom as CronRoomBase,
 } from 'deepspace/worker'
 import type { ActionTools, ActionResult, DOManifest, DOBindings } from 'deepspace/worker'
 import { streamText, type LanguageModelV1 } from 'ai'
 import { actions } from './src/actions/index.js'
-import { handleCron } from './src/cron.js'
+import { tasks as cronTasks, runTask as runCronTask } from './src/cron.js'
 import { schemas } from './src/schemas.js'
 import { integrations } from './src/integrations.js'
 import { buildChatTools } from './src/ai/tools.js'
@@ -50,6 +52,7 @@ export const __DO_MANIFEST__ = [
   { binding: 'YJS_ROOMS', className: 'YjsRoom', sqlite: true },
   { binding: 'CANVAS_ROOMS', className: 'CanvasRoom', sqlite: true },
   { binding: 'PRESENCE_ROOMS', className: 'PresenceRoom', sqlite: true },
+  { binding: 'CRON_ROOMS', className: 'CronRoom', sqlite: true },
 ] as const satisfies DOManifest
 
 // =============================================================================
@@ -65,6 +68,21 @@ export class RecordRoom extends RecordRoomBase {
 export class YjsRoom extends YjsRoomBase {}
 export class CanvasRoom extends CanvasRoomBase {}
 export class PresenceRoom extends PresenceRoomBase {}
+
+/**
+ * CronRoom — runs the scheduled tasks declared in src/cron.ts. The DO alarm
+ * fires at each task's interval / cron-expression match, calls onTask(name),
+ * and records the execution in its own cron_history table.
+ */
+export class CronRoom extends CronRoomBase<Env> {
+  constructor(state: DurableObjectState, env: Env) {
+    super(state, env, { tasks: cronTasks })
+  }
+
+  protected async onTask(taskName: string): Promise<void> {
+    await runCronTask(taskName, this.env)
+  }
+}
 
 // =============================================================================
 // Types
@@ -88,7 +106,6 @@ interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    * they are the JWT subject.
    */
   APP_OWNER_JWT: string
-  INTERNAL_STORAGE_HMAC_SECRET: string
 }
 
 type AppContext = { Bindings: Env }
@@ -388,94 +405,6 @@ async function maybeInjectAgentEditRevision(
   }
 }
 
-function capToolResultSize(result: unknown): unknown {
-  let serialized: string
-  try {
-    serialized = JSON.stringify(result)
-  } catch {
-    return { success: false, error: 'Tool result could not be serialized.' }
-  }
-  if (serialized.length <= TOOL_RESULT_BYTE_CAP) return result
-  return {
-    success: false,
-    truncated: true,
-    error:
-      `Tool result exceeded ${TOOL_RESULT_BYTE_CAP} bytes (was ${serialized.length}). ` +
-      `Retry with a narrower query (e.g. add a \`where\` filter, reduce \`limit\`, ` +
-      `or call records.get for a single record).`,
-    preview: serialized.slice(0, 2_000),
-  }
-}
-
-type ChatTurn = {
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  parts?: Array<unknown>
-}
-
-/**
- * Walk message history and replace the `result` payload of tool-invocation
- * parts in OLDER assistant messages with a small marker. Errors (success=false)
- * are preserved as-is — they're small and useful for the agent's reasoning.
- */
-function truncateOldToolResults(messages: ChatTurn[], keepLast: number): ChatTurn[] {
-  // Find the index of the first assistant message we want to protect — anything
-  // before that gets its tool results truncated.
-  const assistantIdxs: number[] = []
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role === 'assistant') assistantIdxs.push(i)
-  }
-  const protectedStart = assistantIdxs.length > keepLast
-    ? assistantIdxs[assistantIdxs.length - keepLast]
-    : 0
-
-  return messages.map((msg, idx) => {
-    if (msg.role !== 'assistant' || idx >= protectedStart) return msg
-    if (!Array.isArray(msg.parts) || msg.parts.length === 0) return msg
-    const newParts = msg.parts.map((p) => {
-      if (!p || typeof p !== 'object') return p
-      const anyP = p as Record<string, unknown>
-      if (anyP.type !== 'tool-invocation') return p
-      const inv = anyP.toolInvocation as Record<string, unknown> | undefined
-      if (!inv || inv.state !== 'result') return p
-      const result = inv.result as Record<string, unknown> | undefined
-      // Preserve errors — they're small and the agent may need to retry.
-      if (result && result.success === false) return p
-      return {
-        ...anyP,
-        toolInvocation: {
-          ...inv,
-          result: {
-            _truncated: true,
-            note: 'Result from an earlier turn omitted to save context. Call this tool again if you need the data.',
-          },
-        },
-      }
-    })
-    return { ...msg, parts: newParts }
-  })
-}
-
-/**
- * Drop oldest messages until total character count is under `charCap`,
- * preserving at least `minKept` messages at the tail.
- */
-function applySlidingWindow(messages: ChatTurn[], charCap: number, minKept: number): ChatTurn[] {
-  const sizeOf = (m: ChatTurn): number => {
-    const text = (m.content ?? '') + (m.parts ? JSON.stringify(m.parts) : '')
-    return text.length
-  }
-  let total = messages.reduce((acc, m) => acc + sizeOf(m), 0)
-  if (total <= charCap) return messages
-  const out = [...messages]
-  while (out.length > minKept && total > charCap) {
-    const dropped = out.shift()
-    if (!dropped) break
-    total -= sizeOf(dropped)
-  }
-  return out
-}
-
 // ---------------------------------------------------------------------------
 
 app.post('/api/ai/chat', async (c) => {
@@ -533,10 +462,10 @@ app.post('/api/ai/chat', async (c) => {
   async function execTool(toolName: string, params: Record<string, unknown>): Promise<unknown> {
     const doId = c.env.RECORD_ROOMS.idFromName(scopeId)
     const stub = c.env.RECORD_ROOMS.get(doId)
-    // userId goes in the X-User-Id header. The DO's tool executor used to read
-    // it from the JSON body (pre-0.3.x); the migration moved identity to the
-    // header to match the WS / /api/* identity-strip security model. Sending
-    // it in the body silently degrades to anonymous and RBAC returns nothing.
+    // Identity travels in the X-User-Id header — the DO's tool executor reads
+    // it from there to match the WS / /api/* identity-strip security model.
+    // Putting it in the body silently degrades to anonymous and RBAC returns
+    // nothing.
     const res = await stub.fetch(new Request('https://internal/api/tools/execute', {
       method: 'POST',
       headers: {
@@ -551,7 +480,7 @@ app.post('/api/ai/chat', async (c) => {
   const tools = buildChatTools(async (toolName, params) => {
     const augmented = await maybeInjectAgentEditRevision(toolName, params, execTool)
     const payload = await execTool(toolName, augmented)
-    return capToolResultSize(payload)
+    return capToolResultSize(payload, TOOL_RESULT_BYTE_CAP)
   })
 
   // Context management: strip bulky tool result payloads from old turns,
@@ -630,23 +559,6 @@ app.all('/api/files/*', async (c) => {
   }
 
   return new Response(resp.body, { status: resp.status, headers: resp.headers })
-})
-
-// ---------------------------------------------------------------------------
-// Internal cron (HMAC-authenticated)
-// ---------------------------------------------------------------------------
-
-app.post('/internal/cron', async (c) => {
-  const body = await c.req.text()
-  const valid = await verifyInternalSignature({
-    secret: c.env.INTERNAL_STORAGE_HMAC_SECRET,
-    payload: buildInternalPayload(body),
-    signature: c.req.header('x-internal-signature') ?? '',
-    timestamp: c.req.header('x-internal-timestamp') ?? '',
-  })
-  if (!valid) return c.json({ error: 'Forbidden' }, 403)
-  await handleCron(JSON.parse(body))
-  return c.json({ ok: true })
 })
 
 // ---------------------------------------------------------------------------

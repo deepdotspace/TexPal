@@ -6,7 +6,7 @@ The client sends the agent *everything it needs to know about the current projec
 
 ## Why this shape
 
-The original miyagi pattern had the agent query `activeLatexDocId` + `projectFiles` at the start of every turn. That pattern failed under the SDK because:
+The prior implementation had the agent query `activeLatexDocId` + `projectFiles` at the start of every turn. That pattern failed under the SDK because:
 
 - The SDK has no platform shell implicitly propagating context.
 - `activeLatexDocId` is RBAC-gated (`read: 'own'`) and timing-sensitive — races between "user opened doc" and "agent queried" return empty results.
@@ -45,7 +45,7 @@ AiChatSidebar(documentId, activeFilePath, activeFileContent)
          tool calls run during generation:             │
            executor('records.create', { collection: 'agentEdits', data: {...} })
                                                       │
-           DO /api/tools/execute — body carries userId, tool, params — RBAC applied
+           DO /api/tools/execute — X-User-Id header carries userId; body carries tool, params — RBAC applied
 ```
 
 Client side, `useAgentEditsProcessor` is already listening to `agentEdits`. When the agent's tool call creates a pending row, the subscription fires and the processor applies it to `projectFiles`. FileEditor sees the `agentRevision` bump and rehydrates its Yjs buffer. The user sees the edit and hits Compile.
@@ -71,7 +71,7 @@ The prompt is assembled fresh on every turn. When the user switches files within
 
 ## RBAC
 
-The worker forwards `userId: auth.userId` in the body of `/api/tools/execute`. The DO reads `userId` from the body (not from headers — this was a bug in the starter; see gotchas.md #1), looks up the user's role, and enforces the schema's `permissions` block.
+The worker forwards the caller's userId via the `X-User-Id` header on `/api/tools/execute`. The DO reads `userId` from that header (see gotchas.md #1), looks up the user's role, and enforces the schema's `permissions` block.
 
 Context loading happens under the **same userId**. If the user can't read `projectFiles` for this document, the worker can't either — so the context block is honest about what this user actually has access to.
 
@@ -123,4 +123,4 @@ Unchanged. `result.toDataStreamResponse()` → AI SDK data stream → `useChat` 
 - `createDeepSpaceAI` + Vercel AI SDK + Anthropic Sonnet.
 - The left-sidebar UI (collapsible rail + resize).
 - Per-user JWT billing.
-- The `userId`-in-body fix.
+- Passing the caller's userId via the `X-User-Id` header so RBAC is enforced.

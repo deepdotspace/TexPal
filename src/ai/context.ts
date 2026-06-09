@@ -62,9 +62,8 @@ export interface ContextLoaderEnv {
  * is enforced. Mirrors the chat tool executor — using the same transport for
  * both means we share the same auth model and the same bug surface.
  *
- * userId travels in the X-User-Id header (post-0.3.x SDK contract). Sending
- * it in the body — as we did during the 0.3.10 migration — silently routed
- * every call as anonymous and made RBAC return zero rows.
+ * userId travels in the X-User-Id header. Sending it in the body instead
+ * silently routes the call as anonymous and makes RBAC return zero rows.
  */
 async function callTool(
   env: ContextLoaderEnv,

@@ -406,6 +406,7 @@ export default function LandingPageV2({ onOpenEditor }: LandingPageV2Props) {
     <ScrollRootContext.Provider value={scrollRef}>
       <div
         ref={scrollRef}
+        data-testid="landing-page"
         className="lp2"
         style={{ overflowY: 'auto', overflowX: 'hidden', height: '100vh' }}
       >

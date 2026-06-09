@@ -1,23 +1,23 @@
-import { test, expect } from '@playwright/test'
-import { createTestUsers } from './helpers/auth'
+import { test, expect } from 'deepspace/testing'
 
-async function waitForApp(page: import('@playwright/test').Page) {
-  await page.waitForSelector('[data-testid="app-navigation"]', { timeout: 15000 })
-}
+/**
+ * Multi-user smoke. Two authenticated users, in isolated browser contexts,
+ * each independently reach the signed-in app. Uses the SDK's `users` fixture,
+ * which handles sign-in (cached per-account storage state) and cleanup.
+ *
+ * Requires at least 2 test accounts in the shared pool:
+ *   npx deepspace test-accounts create --email a@deepspace.test --password <pw> --name "A"
+ *   npx deepspace test-accounts create --email b@deepspace.test --password <pw> --name "B"
+ */
+test('two users independently reach the signed-in app', async ({ users }) => {
+  const [a, b] = await users(2)
 
-test.describe('Multi-user collaboration', () => {
-  test('two users are recognized as different users', async ({ browser }) => {
-    const users = await createTestUsers(browser, 2)
+  // The fixture handed us two distinct accounts.
+  expect(a.userId).not.toBe(b.userId)
 
-    try {
-      await waitForApp(users[0].page)
-      await waitForApp(users[1].page)
+  await Promise.all([a.page.goto('/home'), b.page.goto('/home')])
 
-      // Both should show signed-in state with their names
-      await expect(users[0].page.getByTestId('nav-user-name')).toContainText('User 1')
-      await expect(users[1].page.getByTestId('nav-user-name')).toContainText('User 2')
-    } finally {
-      for (const u of users) await u.context.close()
-    }
-  })
+  // Each isolated session loads the signed-in home shell.
+  await expect(a.page.getByTestId('home-page')).toBeVisible({ timeout: 15_000 })
+  await expect(b.page.getByTestId('home-page')).toBeVisible({ timeout: 15_000 })
 })

@@ -1,5 +1,5 @@
 import React, { ReactNode, JSX } from 'react'
-import { FileText, Search, Inbox, Plus, FolderOpen, Users, AlertCircle } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { cn } from './utils'
 
 // ============================================================================
@@ -62,100 +62,6 @@ export function EmptyState({
         </div>
       )}
     </div>
-  )
-}
-
-// ============================================================================
-// Pre-built empty state variants
-// ============================================================================
-
-interface EmptyStateVariantProps {
-  action?: {
-    label: string
-    onClick: () => void
-  }
-  className?: string
-}
-
-export function EmptyItems({ action, className }: EmptyStateVariantProps): JSX.Element {
-  return (
-    <EmptyState
-      icon={<Inbox className="w-8 h-8" />}
-      title="No items yet"
-      description="Get started by creating your first item."
-      action={action ? { label: action.label, onClick: action.onClick } : undefined}
-      className={className}
-    />
-  )
-}
-
-interface EmptySearchProps extends EmptyStateVariantProps {
-  query?: string
-  onClear?: () => void
-}
-
-export function EmptySearch({ query, onClear, className }: EmptySearchProps): JSX.Element {
-  return (
-    <EmptyState
-      icon={<Search className="w-8 h-8" />}
-      title="No results found"
-      description={query ? `No results for "${query}". Try a different search term.` : 'Try adjusting your search or filters.'}
-      secondaryAction={onClear ? { label: 'Clear search', onClick: onClear } : undefined}
-      className={className}
-    />
-  )
-}
-
-export function EmptyDocuments({ action, className }: EmptyStateVariantProps): JSX.Element {
-  return (
-    <EmptyState
-      icon={<FileText className="w-8 h-8" />}
-      title="No documents"
-      description="Create a document to start writing."
-      action={action ? { label: action.label, onClick: action.onClick } : undefined}
-      className={className}
-    />
-  )
-}
-
-export function EmptyProjects({ action, className }: EmptyStateVariantProps): JSX.Element {
-  return (
-    <EmptyState
-      icon={<FolderOpen className="w-8 h-8" />}
-      title="No projects"
-      description="Create a project to organize your work."
-      action={action ? { label: action.label, onClick: action.onClick } : undefined}
-      className={className}
-    />
-  )
-}
-
-export function EmptyTeam({ action, className }: EmptyStateVariantProps): JSX.Element {
-  return (
-    <EmptyState
-      icon={<Users className="w-8 h-8" />}
-      title="No team members"
-      description="Invite people to collaborate with you."
-      action={action ? { label: action.label, onClick: action.onClick } : undefined}
-      className={className}
-    />
-  )
-}
-
-interface EmptyErrorProps extends EmptyStateVariantProps {
-  error?: string
-  onRetry?: () => void
-}
-
-export function EmptyError({ error, onRetry, className }: EmptyErrorProps): JSX.Element {
-  return (
-    <EmptyState
-      icon={<AlertCircle className="w-8 h-8 text-destructive" />}
-      title="Something went wrong"
-      description={error || 'An error occurred. Please try again.'}
-      action={onRetry ? { label: 'Try again', onClick: onRetry } : undefined}
-      className={className}
-    />
   )
 }
 

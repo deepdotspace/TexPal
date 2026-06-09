@@ -11,7 +11,7 @@ A resizable, collapsible chat sidebar on the left edge of the editor. A user typ
 5. The frontend's `useAgentEditsProcessor` hook picks them up and applies them to `projectFiles`.
 6. The user's editor updates in real-time (via Yjs sync), and they hit Compile to render the PDF.
 
-This is the same end-user experience that the app had under miyagi — the only thing that changed is where the plumbing lives.
+This is the same end-user experience the original app had before the SDK port — the only thing that changed is where the plumbing lives.
 
 ## What the user sees
 
@@ -24,9 +24,9 @@ This is the same end-user experience that the app had under miyagi — the only 
 - A drag handle on the right edge of the sidebar, between the chat and the file-tree sidebar.
 - State persistence: collapsed/expanded and width are stored in `localStorage`.
 
-## What the developer changed vs. miyagi
+## What the developer changed vs. the original app
 
-| Concern | Miyagi | This app |
+| Concern | Original app | This app |
 |---|---|---|
 | Who renders the chat panel | platform shell | the app (`src/components/ai-chat/AiChatSidebar.tsx`) |
 | How the agent learns the current doc | platform injected it | client passes `documentId` + `activeFilePath` in the chat body; worker builds a dynamic system prompt per turn |
@@ -40,6 +40,6 @@ See `docs/ai-chat/architecture.md` for the full request lifecycle.
 
 ## Why we don't use tool calls for context discovery anymore
 
-The earlier port made the agent query `activeLatexDocId` at the start of every turn. That was a miyagi-ism — it worked there because the platform shell populated the row and scoped the query implicitly. Under the SDK, the pattern fails: RBAC on the collection (`read: 'own'`) and the timing between "user opens document" and "agent queries" introduce races that produce false "no document open" responses.
+The earlier port made the agent query `activeLatexDocId` at the start of every turn. That was an artifact of the prior implementation — it worked there because the original platform shell populated the row and scoped the query implicitly. Under the SDK, the pattern fails: RBAC on the collection (`read: 'own'`) and the timing between "user opens document" and "agent queries" introduce races that produce false "no document open" responses.
 
 The current architecture eliminates this entire class of failure by making the client — which already knows the active doc and file — put that information into the chat request body. The worker adds the project state to the system prompt before the model sees the message. No tool call, no race, no empty-result confusion.
