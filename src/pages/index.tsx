@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth, useUser, AuthOverlay } from 'deepspace'
 import LandingPageV2 from '../components/landing/LandingPageV2'
 
@@ -31,9 +31,16 @@ export default function LandingRoute() {
   const { isSignedIn } = useAuth()
   const { user } = useUser()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [showAuthOverlay, setShowAuthOverlay] = useState(false)
 
-  const shouldSkip = isSignedIn && hasSeenLanding(user?.id)
+  // `?landing=1` (or `?landing`) forces the landing view even for users who've
+  // seen it before. The editor's top-bar "Back to TeXPal" link uses this so a
+  // returning signed-in user can still get back to the landing instead of
+  // bouncing straight to /home.
+  const forceLanding = searchParams.has('landing')
+
+  const shouldSkip = !forceLanding && isSignedIn && hasSeenLanding(user?.id)
 
   useEffect(() => {
     if (shouldSkip) {

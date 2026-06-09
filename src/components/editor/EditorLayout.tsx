@@ -10,6 +10,7 @@
  */
 
 import React, { useRef, useCallback, useMemo, useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutations, useR2Files } from 'deepspace'
 import { useCompilation, useDocumentOutline, usePanelResize, useEditorSettings, useVersionHistory, useAgentEditsProcessor } from '../../hooks'
 import { useProjectFiles } from '../../hooks/useProjectFiles'
@@ -417,7 +418,24 @@ export function EditorLayout({
   const effectiveSidebarWidth = sidebarCollapsed ? 0 : sidebarWidth
 
   return (
-    <div ref={containerRef} className="editor-shell flex-1">
+    <div className="flex flex-col h-full min-h-0">
+      {/* Top app-bar — TeXPal brand on the left + doc title in the middle +
+          "Back to TeXPal" link on the right. Both brand and right-link route
+          to /?landing=1 so a returning signed-in user actually sees the
+          landing page instead of being bounced to /home. */}
+      <header className="texpal-topbar shrink-0">
+        <Link to="/?landing=1" className="texpal-topbar-brand" aria-label="Back to TeXPal landing">
+          <img src="/favicon.svg" alt="" width="20" height="20" />
+          <span>TeXPal</span>
+        </Link>
+        <span className="texpal-topbar-title" title={currentTitle || documentTitle}>
+          {currentTitle || documentTitle || 'Untitled'}
+        </span>
+        <Link to="/?landing=1" className="texpal-topbar-back">
+          ← Back to TeXPal
+        </Link>
+      </header>
+    <div ref={containerRef} className="editor-shell flex-1 min-h-0">
       <div className="editor-shell-row">
         {/* Card — the rounded rectangle that holds the "app": file-tree
             sidebar, editor, PDF. Visually distinct from the chat on the right. */}
@@ -617,6 +635,7 @@ export function EditorLayout({
         onClose={() => setShareOpen(false)}
         documentTitle={currentTitle}
       />
+    </div>
     </div>
   )
 }
