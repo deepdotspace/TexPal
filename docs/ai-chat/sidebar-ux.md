@@ -98,12 +98,3 @@ assistant messages are plain prose. The composer is a ghost input: a
 thin top hairline, a textarea, and a send button that only becomes
 prominent when there's content.
 
-## What changed vs. the first version
-
-- Two sidebars → one sidebar with an activity rail.
-- Chat always mounted → messages survive view-switches and collapse
-  (fixing the Item 2 bug: collapsing no longer wipes the chat).
-- Message bubbles → typographic mono-column.
-- Post-hoc tool pills → in-order tool rows that go live → done.
-- "Thinking" bubble only before first text → pulsing dot on the entire
-  streaming turn.

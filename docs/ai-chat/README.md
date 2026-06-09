@@ -141,21 +141,6 @@ No caching. Every chat turn reloads project state from the DO. This is cheap (in
 - **Session expired mid-turn** — 401 surfaces as a red banner with a retry button.
 - **Tool call RBAC failure** — the model sees the structured error and can retry or explain to the user.
 
-## What came from the original app, what's new, what's gone
-
-| | Status |
-|---|---|
-| `agentEdits` schema + processor pipeline | **Kept** unchanged — the dual-content rehydration model is correct. |
-| Agent-edits action table (update/create/rename/delete) | **Kept** — same semantics. |
-| Behavioral rules for LaTeX (file path conventions, binary-file caveat, entry-file protection) | **Kept** — ported into `latex-prompt.ts`. |
-| Floating-corner platform chat widget | **Gone** — the SDK has no platform shell. Each app renders its own chat. |
-| Runtime-loaded `agent-prompt.md` / `agent-description.md` | **Gone** — prompts are code strings now. The MD files in this folder are developer docs, not runtime artifacts. |
-| "Agent must query `activeLatexDocId` first" ritual | **Gone** — replaced by client-pushed context. |
-| `schema.list` / `user.current` tool exposure | **Dropped** — baked into the prompt or not needed. |
-| Resizable left sidebar UI | **New** — built on the app's existing `ResizeDivider` primitive; state persisted in localStorage. |
-| Server-side dynamic context loading per turn | **New** — `src/ai/context.ts`. |
-| Per-user JWT billing through the DeepSpace proxy | **New** (architecturally) — the original app billed at the platform level. |
-
 ## Failure modes that are now structurally impossible
 
 - "You don't have a document open" when you do — the agent can't mis-read a collection that's no longer part of the loop.

@@ -40,11 +40,11 @@ This file orients future Claude sessions to the repo. For feature-specific knowl
 
 Feature-level knowledge lives in `docs/`. These are wiki-style notes intended to survive across sessions — read them before touching the relevant feature:
 
-- `docs/ai-chat/overview.md` — what the AI chat does end to end
-- `docs/ai-chat/architecture.md` — plumbing, request lifecycle, scope reasoning
-- `docs/ai-chat/agent-instructions.md` — the system prompt (ported from the original app's agent-prompt.md)
-- `docs/ai-chat/sidebar-ux.md` — UX decisions for the left chat sidebar
-- `docs/ai-chat/gotchas.md` — SDK quirks and fixes already applied
+- `docs/ai-chat/README.md` — high-level "how it works end to end" with the request lifecycle diagram. Start here.
+- `docs/ai-chat/architecture.md` — plumbing, request lifecycle, scope reasoning, edge cases.
+- `docs/ai-chat/agent-instructions.md` — the system prompt (kept in sync with `src/ai/latex-prompt.ts`).
+- `docs/ai-chat/sidebar-ux.md` — UX spec for the left chat sidebar.
+- `docs/ai-chat/gotchas.md` — SDK quirks and applied fixes — read before editing the chat plumbing.
 
 ## Non-obvious conventions
 
