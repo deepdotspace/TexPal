@@ -1,10 +1,63 @@
 import React, { useState, useMemo, useEffect } from 'react'
+import { Link } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import { APP_NAME, STARTER_TEMPLATES, type StarterTemplate } from '../../constants'
 import { useGitHubTemplates, type GitHubTemplate } from '../../hooks/useGitHubTemplates'
 import { useEditorSettings } from '../../hooks/useEditorSettings'
 import { TemplateCard } from './TemplateCard'
 import { Modal, ConfirmModal } from '../ui/Modal'
 import { Button } from '../ui/Button'
+
+/**
+ * Animated wordmark for the home-page brand. Letters fade + rise in on mount
+ * with a small per-letter stagger; on hover the whole mark scales gently and
+ * the favicon mark rotates a hair. Wrapped in a Link that targets the landing
+ * page (?landing=1 bypasses the "already-seen-landing" auto-redirect in
+ * src/pages/index.tsx so returning signed-in users actually see the landing
+ * instead of being bounced back to /home).
+ */
+function HomeBrand() {
+  const letters = APP_NAME.toUpperCase().split('')
+  return (
+    <Link
+      to="/?landing=1"
+      aria-label="Go to the TeXPal landing page"
+      className="group inline-flex flex-col items-center gap-3 select-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-4 focus-visible:ring-offset-surface rounded-2xl"
+    >
+      <motion.span
+        className="relative inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#0f0f0f] text-[#f5f0e6] shadow-sm"
+        initial={{ scale: 0.6, opacity: 0, rotate: -8 }}
+        animate={{ scale: 1, opacity: 1, rotate: 0 }}
+        transition={{ type: 'spring', stiffness: 240, damping: 18 }}
+        whileHover={{ rotate: 4, scale: 1.05 }}
+        whileTap={{ scale: 0.96 }}
+      >
+        <motion.span
+          aria-hidden="true"
+          className="font-serif text-[34px] leading-none font-bold"
+          animate={{ y: [0, -1.5, 0] }}
+          transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+        >
+          T
+        </motion.span>
+      </motion.span>
+
+      <h1 className="flex items-baseline gap-[0.04em] text-content text-[34px] font-serif font-bold tracking-[0.18em] leading-none">
+        {letters.map((char, i) => (
+          <motion.span
+            key={i}
+            initial={{ y: 14, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.12 + i * 0.05, duration: 0.45, ease: [0.2, 0.65, 0.3, 1] }}
+            className="inline-block transition-colors duration-200 group-hover:text-accent"
+          >
+            {char}
+          </motion.span>
+        ))}
+      </h1>
+    </Link>
+  )
+}
 
 interface DocumentRecord {
   recordId: string
@@ -227,19 +280,10 @@ export function TemplatePicker({
         </button>
       </div>
 
-      {/* Logo + Title */}
-      <div className="max-w-3xl w-full text-center mb-6">
-        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-accent-light dark:bg-accent/20 flex items-center justify-center text-accent dark:text-accent-muted">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <path d="M14 2v6h6" />
-            <path d="M16 13H8" />
-            <path d="M16 17H8" />
-            <path d="M10 9H8" />
-          </svg>
-        </div>
-        <h1 className="text-2xl font-semibold text-content mb-1">{APP_NAME}</h1>
-        <p className="text-content-secondary text-sm">
+      {/* Brand mark — animated, capitalized, links to the landing page. */}
+      <div className="max-w-3xl w-full text-center mb-8 flex flex-col items-center">
+        <HomeBrand />
+        <p className="text-content-secondary text-sm mt-4">
           Create a new document or continue where you left off.
         </p>
       </div>
