@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { APP_NAME, STARTER_TEMPLATES, type StarterTemplate } from '../../constants'
+import { STARTER_TEMPLATES, type StarterTemplate } from '../../constants'
 import { useGitHubTemplates, type GitHubTemplate } from '../../hooks/useGitHubTemplates'
 import { useEditorSettings } from '../../hooks/useEditorSettings'
 import { TemplateCard } from './TemplateCard'
@@ -9,52 +9,45 @@ import { Modal, ConfirmModal } from '../ui/Modal'
 import { Button } from '../ui/Button'
 
 /**
- * Animated wordmark for the home-page brand. Letters fade + rise in on mount
- * with a small per-letter stagger; on hover the whole mark scales gently and
- * the favicon mark rotates a hair. Wrapped in a Link that targets the landing
- * page (?landing=1 bypasses the "already-seen-landing" auto-redirect in
- * src/pages/index.tsx so returning signed-in users actually see the landing
- * instead of being bounced back to /home).
+ * Animated wordmark for the home-page brand. The whole mark fades + scales in
+ * subtly on mount; on hover it lifts a hair and the wordmark shifts to the
+ * accent color. Wraps a <Link> that targets the landing page; the ?landing=1
+ * query (read in src/pages/index.tsx) bypasses the "already-seen-landing"
+ * auto-redirect so a returning signed-in user actually sees the landing
+ * instead of being bounced back to /home.
+ *
+ * Typographic choices: Inter (the project's default sans-serif, loaded in
+ * styles.css) at semibold with tight tracking, sized so the brand is the
+ * clear visual anchor of the home page without being a giant slab.
  */
 function HomeBrand() {
-  const letters = APP_NAME.toUpperCase().split('')
   return (
     <Link
       to="/?landing=1"
       aria-label="Go to the TeXPal landing page"
-      className="group inline-flex flex-col items-center gap-3 select-none cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-4 focus-visible:ring-offset-surface rounded-2xl"
+      className="group inline-flex flex-col items-center gap-3.5 select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-4 focus-visible:ring-offset-surface rounded-2xl"
     >
       <motion.span
-        className="relative inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#0f0f0f] text-[#f5f0e6] shadow-sm"
-        initial={{ scale: 0.6, opacity: 0, rotate: -8 }}
-        animate={{ scale: 1, opacity: 1, rotate: 0 }}
-        transition={{ type: 'spring', stiffness: 240, damping: 18 }}
-        whileHover={{ rotate: 4, scale: 1.05 }}
-        whileTap={{ scale: 0.96 }}
+        className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#0f0f0f] text-[#f5f0e6] shadow-sm"
+        initial={{ scale: 0.92, opacity: 0, y: 4 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 22 }}
+        whileHover={{ y: -2 }}
+        whileTap={{ scale: 0.97 }}
       >
-        <motion.span
-          aria-hidden="true"
-          className="font-serif text-[34px] leading-none font-bold"
-          animate={{ y: [0, -1.5, 0] }}
-          transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
-        >
+        <span aria-hidden="true" className="text-[26px] leading-none font-semibold tracking-tight">
           T
-        </motion.span>
+        </span>
       </motion.span>
 
-      <h1 className="flex items-baseline gap-[0.04em] text-content text-[34px] font-serif font-bold tracking-[0.18em] leading-none">
-        {letters.map((char, i) => (
-          <motion.span
-            key={i}
-            initial={{ y: 14, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.12 + i * 0.05, duration: 0.45, ease: [0.2, 0.65, 0.3, 1] }}
-            className="inline-block transition-colors duration-200 group-hover:text-accent"
-          >
-            {char}
-          </motion.span>
-        ))}
-      </h1>
+      <motion.h1
+        initial={{ y: 6, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.08, duration: 0.4, ease: [0.2, 0.65, 0.3, 1] }}
+        className="text-content text-[30px] font-semibold tracking-tight leading-none transition-colors duration-200 group-hover:text-accent"
+      >
+        TeXPal
+      </motion.h1>
     </Link>
   )
 }
