@@ -7,6 +7,7 @@ import { useEditorSettings } from '../../hooks/useEditorSettings'
 import { TemplateCard } from './TemplateCard'
 import { Modal, ConfirmModal } from '../ui/Modal'
 import { Button } from '../ui/Button'
+import { AccountMenu } from '../account/AccountMenu'
 
 /**
  * Animated wordmark for the home-page brand. The whole mark fades + scales in
@@ -253,8 +254,8 @@ export function TemplatePicker({
 
   return (
     <div data-testid="home-page" className="relative flex-1 flex flex-col items-center p-6 pt-10 overflow-y-auto bg-surface dark:bg-dark-surface">
-      {/* Theme Toggle - Top Right */}
-      <div className="absolute top-4 right-4 z-10">
+      {/* Account + Theme Toggle - Top Right */}
+      <div className="absolute top-4 right-4 z-10 flex items-center gap-1.5">
         <button
           onClick={handleThemeToggle}
           className="p-2 rounded-lg hover:bg-surface-overlay text-content-secondary hover:text-content transition-colors"
@@ -271,6 +272,7 @@ export function TemplatePicker({
             </svg>
           )}
         </button>
+        <AccountMenu />
       </div>
 
       {/* Brand mark — animated, capitalized, links to the landing page. */}
