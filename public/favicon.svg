@@ -1,7 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#0f0f0f"/>
-  <text x="16" y="24" text-anchor="middle"
-        font-family="Georgia, 'Times New Roman', serif"
-        font-size="22" font-weight="700"
-        fill="#f5f0e6">T</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TeXPal">
+  <!-- Tile -->
+  <rect width="64" height="64" rx="14" fill="#0f0f0f"/>
+  <!-- Typeset formula lines (radicand) in the app accent indigo -->
+  <rect x="33" y="25.5" width="17" height="4.2" rx="2.1" fill="#6366F1"/>
+  <rect x="33" y="34" width="11.5" height="4.2" rx="2.1" fill="#818CF8"/>
+  <!-- Square-root radical: the math / typesetting motif (no letters) -->
+  <path d="M12 34 L16.5 31.5 L22.5 47 L31 16.5 L53 16.5"
+        fill="none" stroke="#f5f0e6" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- AI sparkle -->
+  <path d="M47 40 Q47.9 46.1 54 47 Q47.9 47.9 47 54 Q46.1 47.9 40 47 Q46.1 46.1 47 40 Z"
+        fill="#6366F1"/>
 </svg>

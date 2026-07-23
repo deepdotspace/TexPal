@@ -29,16 +29,14 @@ function HomeBrand() {
       className="group inline-flex flex-col items-center gap-3.5 select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-4 focus-visible:ring-offset-surface rounded-2xl"
     >
       <motion.span
-        className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#0f0f0f] text-[#f5f0e6] shadow-sm"
+        className="inline-flex items-center justify-center w-14 h-14 rounded-2xl shadow-sm overflow-hidden"
         initial={{ scale: 0.92, opacity: 0, y: 4 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 260, damping: 22 }}
         whileHover={{ y: -2 }}
         whileTap={{ scale: 0.97 }}
       >
-        <span aria-hidden="true" className="text-[26px] leading-none font-semibold tracking-tight">
-          T
-        </span>
+        <img src="/favicon.svg" alt="" aria-hidden="true" className="w-full h-full" />
       </motion.span>
 
       <motion.h1
