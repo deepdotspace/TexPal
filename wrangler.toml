@@ -28,7 +28,7 @@ bucket_name = "auto"
 
 [vars]
 APP_NAME = "texpal"
-DEEPSPACE_APP_ID = "texpal"
+DEEPSPACE_APP_ID = "app_01KZ4GBR56K33K5SMR4FST3R49"
 
 [dev]
 port = 8780
