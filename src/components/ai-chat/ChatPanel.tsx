@@ -9,25 +9,36 @@
  * true — solving the "frozen bubble" perception during tool-call gaps.
  *
  * Behavioral contracts preserved:
- *   - useChat({ api: '/api/ai/chat', body: { documentId, activeFilePath,
- *     activeFileContent }, fetch: <bearer-wrapper> })
+ *   - AI SDK v5 DefaultChatTransport sends documentId, activeFilePath, and
+ *     activeFileContent while attaching a fresh bearer token per request
  *   - messages reset on documentId change
  *   - auth gate shows AuthOverlay on sign-in
  *
  * Item-6 specifics: we render `message.parts[]` in their produced order. Each
- * `type: 'text'` is printed inline; each `type: 'tool-invocation'` becomes a
- * tool row that tracks its state (`call` → `result`). Tool names and their
+ * `type: 'text'` is printed inline; each `type: 'tool-<name>'` becomes a
+ * tool row that tracks its input/output state. Tool names and their
  * `collection`+`data` params are humanized (see `describeTool`).
  */
 
-import { useState, useRef, useEffect, useMemo, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react'
 import { useChat } from '@ai-sdk/react'
+import { DefaultChatTransport, type UIMessage } from 'ai'
 import { useAuth, AuthOverlay, getAuthToken } from 'deepspace'
 import { ArrowUp, AlertCircle, RefreshCw, Check, ChevronDown, Square } from 'lucide-react'
-import type { Message } from '@ai-sdk/ui-utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CHAT_MODELS, DEFAULT_MODEL_ID, type ChatModelProvider } from '../../ai/models'
+
+type ChatMessage = UIMessage
+type ChatPart = ChatMessage['parts'][number]
 
 // ============================================================================
 // localStorage keys
@@ -121,12 +132,22 @@ export function ChatPanel({ documentId, activeFilePath, activeFileContent, newCh
   )
 }
 
-function loadPersistedMessages(documentId: string): Message[] {
+function isPersistedMessage(value: unknown): value is ChatMessage {
+  if (!value || typeof value !== 'object') return false
+  const message = value as Record<string, unknown>
+  return (
+    typeof message.id === 'string' &&
+    typeof message.role === 'string' &&
+    Array.isArray(message.parts)
+  )
+}
+
+function loadPersistedMessages(documentId: string): ChatMessage[] {
   try {
     const raw = localStorage.getItem(MESSAGES_KEY_PREFIX + documentId)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as Message[]) : []
+    return Array.isArray(parsed) ? parsed.filter(isPersistedMessage) : []
   } catch {
     return []
   }
@@ -156,28 +177,40 @@ function Chat({
   // fresh storage — no need for a separate LOAD effect.
   const initialMessages = useMemo(() => loadPersistedMessages(documentId), [documentId])
 
+  const [input, setInput] = useState('')
+
+  const bodyRef = useRef({ documentId, activeFilePath, activeFileContent, modelId })
+  bodyRef.current = { documentId, activeFilePath, activeFileContent, modelId }
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<ChatMessage>({
+        api: '/api/ai/chat',
+        fetch: async (url, init) => {
+          const token = await getAuthToken()
+          if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+          const headers = new Headers(init?.headers)
+          if (token) headers.set('Authorization', `Bearer ${token}`)
+          return fetch(url as string, { ...init, headers })
+        },
+        body: () => ({ ...bodyRef.current }),
+      }),
+    [],
+  )
+
   const {
     messages,
-    input,
-    setInput,
-    handleInputChange,
-    handleSubmit,
-    isLoading,
+    sendMessage,
+    status,
     error,
-    reload,
+    regenerate,
     stop,
-  } = useChat({
-    api: '/api/ai/chat',
-    initialMessages,
-    body: { documentId, activeFilePath, activeFileContent, modelId },
-    fetch: async (url, init) => {
-      const token = await getAuthToken()
-      if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-      const headers = new Headers(init?.headers)
-      if (token) headers.set('Authorization', `Bearer ${token}`)
-      return fetch(url, { ...init, headers })
-    },
+  } = useChat<ChatMessage>({
+    messages: initialMessages,
+    transport,
   })
+
+  const isLoading = status === 'streaming' || status === 'submitted'
 
   // Persist transcript to localStorage. Debounced to coalesce the bursty
   // per-token updates during streaming — JSON.stringify of a long history on
@@ -245,12 +278,26 @@ function Chat({
     return () => cancelAnimationFrame(raf)
   }, [input])
 
+  function submitInput() {
+    const text = input.trim()
+    if (!text || isLoading) return
+    sendMessage({ text })
+    setInput('')
+  }
+
+  function onFormSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    submitInput()
+  }
+
+  function onInputChange(e: ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value)
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (input.trim() && !isLoading) {
-        handleSubmit(e as unknown as FormEvent<HTMLFormElement>)
-      }
+      submitInput()
     }
   }
 
@@ -284,7 +331,7 @@ function Chat({
             {messages.map((m, idx) => (
               <MessageRow
                 key={m.id}
-                message={m as Message}
+                message={m}
                 isStreaming={m.id === streamingAssistantId}
                 showDivider={idx > 0}
               />
@@ -301,7 +348,7 @@ function Chat({
           <AlertCircle size={13} className="shrink-0 mt-0.5" />
           <span className="flex-1 break-words leading-relaxed">{error.message}</span>
           <button
-            onClick={() => reload()}
+            onClick={() => regenerate()}
             className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-danger/10 transition-colors"
             title="Retry"
           >
@@ -313,14 +360,14 @@ function Chat({
       {/* Composer — ghost input. Thin top hairline, textarea, submit appears
           only when there's text. Apple-style restraint. */}
       <form
-        onSubmit={handleSubmit}
+        onSubmit={onFormSubmit}
         className="shrink-0 border-t border-border/60 px-3 pt-3 pb-3"
       >
         <div className="relative flex items-center gap-2 rounded-xl border border-border bg-surface-elevated px-3 py-2 focus-within:border-content-tertiary/50 transition-colors">
           <textarea
             ref={inputRef}
             value={input}
-            onChange={handleInputChange}
+            onChange={onInputChange}
             onKeyDown={onKeyDown}
             placeholder={activeFilePath ? `Ask about ${shortBase(activeFilePath)}…` : 'Ask anything…'}
             rows={1}
@@ -518,14 +565,25 @@ function EmptyState({ onSuggest }: { onSuggest: (text: string) => void }) {
 // Message row — parts-ordered rendering.
 // ============================================================================
 
-type Part = NonNullable<Message['parts']>[number]
+type Part = ChatPart
+
+function isToolPart(part: Part): part is Extract<Part, { type: `tool-${string}` }> {
+  return typeof part.type === 'string' && part.type.startsWith('tool-')
+}
+
+function textOfUserMessage(parts: Part[]): string {
+  return parts
+    .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+}
 
 function MessageRow({
   message,
   isStreaming,
   showDivider,
 }: {
-  message: Message
+  message: ChatMessage
   isStreaming: boolean
   showDivider: boolean
 }) {
@@ -536,10 +594,8 @@ function MessageRow({
   const parts: Part[] = useMemo(() => {
     const p = message.parts
     if (p && p.length > 0) return p
-    // Fallback for older messages without parts: synthesize a single text part.
-    if (message.content) return [{ type: 'text', text: message.content }] as Part[]
     return []
-  }, [message.parts, message.content])
+  }, [message.parts])
 
   if (isUser) {
     return (
@@ -547,7 +603,7 @@ function MessageRow({
         {showDivider && <div className="chat-turn-divider" />}
         <div className="flex justify-end">
           <div className="max-w-[85%] text-[13.5px] leading-[1.55] text-content font-medium text-left whitespace-pre-wrap break-words">
-            {message.content}
+            {textOfUserMessage(parts)}
           </div>
         </div>
       </div>
@@ -568,7 +624,7 @@ function MessageRow({
               </div>
             )
           }
-          if (p.type === 'tool-invocation') {
+          if (isToolPart(p)) {
             return <ToolRow key={i} part={p} />
           }
           // reasoning / source / file / step-start — ignore for now.
@@ -588,12 +644,14 @@ function MessageRow({
 // Tool invocation rendering — humanized, live state.
 // ============================================================================
 
-type ToolPart = Extract<Part, { type: 'tool-invocation' }>
+type ToolPart = Extract<Part, { type: `tool-${string}` }>
 
 function ToolRow({ part }: { part: ToolPart }) {
-  const inv = part.toolInvocation
-  const { label, path } = describeTool(inv.toolName, inv.args as Record<string, unknown> | undefined)
-  const isDone = inv.state === 'result'
+  const toolName = part.type.slice('tool-'.length)
+  const input = (part as { input?: unknown }).input as Record<string, unknown> | undefined
+  const state = (part as { state?: string }).state
+  const { label, path } = describeTool(toolName, input)
+  const isDone = state === 'output-available' || state === 'output-error'
 
   return (
     <div

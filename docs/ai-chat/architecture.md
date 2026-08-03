@@ -21,15 +21,14 @@ Browser                                              Server (app worker)
 ------                                               -------------------
 AiChatSidebar(documentId, activeFilePath, activeFileContent)
  └─ ChatPanel
-     └─ useChat({
-          api: '/api/ai/chat',
-          body: {                                     ─►  POST /api/ai/chat
+     └─ DefaultChatTransport({
+          body: () => ({                              ─►  POST /api/ai/chat
             documentId,                                    body: { messages, documentId,
             activeFilePath,                                        activeFilePath,
             activeFileContent,  // live editor buffer            activeFileContent }
-          },
+          }),
           fetch: attaches Bearer JWT,
-        })
+        }) → useChat({ transport })
                                                       │
                                                       │ 1. verifyJwt → userId
                                                       │ 2. loadContext(env, userId, documentId, activeFilePath)
@@ -39,7 +38,8 @@ AiChatSidebar(documentId, activeFilePath, activeFileContent)
                                                       │ 3. system = buildLatexSystemPrompt(context)
                                                       │ 4. tools = buildChatTools(executor)      ─ writes + escape-hatch reads
                                                       │ 5. createDeepSpaceAI(env, 'anthropic', { authToken })
-                                                      │ 6. streamText({ model, system, messages, tools, maxSteps: 20 })
+                                                      │ 6. convertToModelMessages + prune/cap history
+                                                      │ 7. streamText({ ..., stopWhen: stepCountIs(20) })
                                                       │
          ◄─── SSE data stream (AI SDK format) ────────┤
          tool calls run during generation:             │
@@ -79,10 +79,10 @@ Tools are scoped for writes that go through RBAC. There is no `?appAction=true` 
 
 ## Conversation scope
 
-- **Per document, in-memory.** Messages live only in `useChat`'s React state.
-- **Reset on document switch.** `ChatPanel` watches `documentId` and calls `setMessages([])` when it changes. Rationale: a conversation about doc A doesn't carry sensible context for doc B.
+- **Per document, persisted locally.** Messages live in `useChat` state and are mirrored to a document-scoped localStorage key.
+- **Reset on document switch.** `ChatPanel` remounts the inner chat with a document-specific key and loads that document's transcript. A conversation about doc A never leaks into doc B.
 - **Preserved across file switches within the same document.** The context block in the system prompt updates to the new active file on the next turn; the history stays, so the agent has continuity ("earlier we were discussing main.tex, now the user is on refs.bib").
-- **Not persisted across browser sessions.** Not in scope.
+- **Persisted across browser sessions on that device.** Persisted messages are shape-validated before use.
 
 ## Tool surface
 
@@ -105,7 +105,7 @@ Dropped tools vs. the original starter set:
 
 ## Streaming
 
-Unchanged. `result.toDataStreamResponse()` → AI SDK data stream → `useChat` on the client. Tool invocation pills render inline in assistant messages.
+`result.toUIMessageStreamResponse()` emits the AI SDK v5 UI stream consumed by `useChat`. Tool parts use `tool-<name>` discriminants and render inline with their input/output state.
 
 ## Edge cases and how they're handled
 

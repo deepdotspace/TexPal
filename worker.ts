@@ -19,11 +19,9 @@ import { cors } from 'hono/cors'
 import {
   verifyJwt,
   createDeepSpaceAI,
-  applySlidingWindow,
-  truncateOldToolResults,
   capToolResultSize,
 } from 'deepspace/worker'
-import type { JwtVerifierConfig, VerifyResult, ChatTurn } from 'deepspace/worker'
+import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
 import {
   RecordRoom as RecordRoomBase,
   YjsRoom as YjsRoomBase,
@@ -32,7 +30,14 @@ import {
   CronRoom as CronRoomBase,
 } from 'deepspace/worker'
 import type { ActionTools, ActionResult, DOManifest, DOBindings } from 'deepspace/worker'
-import { streamText, type LanguageModelV1 } from 'ai'
+import {
+  convertToModelMessages,
+  pruneMessages,
+  stepCountIs,
+  streamText,
+  type ModelMessage,
+  type UIMessage,
+} from 'ai'
 import { actions } from './src/actions/index.js'
 import { tasks as cronTasks, runTask as runCronTask } from './src/cron.js'
 import { schemas } from './src/schemas.js'
@@ -330,11 +335,9 @@ app.post('/api/actions/:name', async (c) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Keep full tool results for this many most-recent assistant turns. Older
- * tool-invocation results get their payload replaced with a small marker,
- * which massively reduces input tokens on long sessions where the agent
- * called tools that returned large blobs (e.g. records_get on a 20KB file).
- * The agent can always re-fetch if it actually needs the data.
+ * Keep full tool calls and results for this many most-recent messages. AI SDK
+ * v5's pruneMessages removes older tool payloads without leaving orphaned
+ * call/result pairs. The agent can always re-fetch data it still needs.
  */
 const KEEP_RECENT_TOOL_RESULTS = 5
 
@@ -350,6 +353,28 @@ const HISTORY_CHAR_CAP = 240_000
  * even if a single turn blew past the cap.
  */
 const MIN_KEPT_MESSAGES = 10
+
+function capModelMessageHistory(
+  messages: ModelMessage[],
+  charCap: number,
+  minKept: number,
+): ModelMessage[] {
+  let chars = 0
+  let start = messages.length
+
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    chars += JSON.stringify(messages[i]).length
+    start = i
+    if (chars > charCap && messages.length - i >= minKept) break
+  }
+
+  if (start === 0) return messages
+
+  // Start at a complete user turn so the retained history never begins with
+  // an assistant/tool continuation whose matching user request was trimmed.
+  while (start < messages.length && messages[start]?.role !== 'user') start += 1
+  return start < messages.length ? messages.slice(start) : messages.slice(-minKept)
+}
 
 /**
  * Max bytes of a single tool invocation's result that we'll hand back to the
@@ -417,16 +442,14 @@ app.post('/api/ai/chat', async (c) => {
   // ~2s debounce on plainContent writes — the agent sees what's on screen
   // right now, not a stale DB copy. See docs/ai-chat/architecture.md.
   const body = await c.req.json<{
-    messages: ChatTurn[]
+    messages: UIMessage[]
     documentId?: string
     activeFilePath?: string | null
     activeFileContent?: string | null
     modelId?: string | null
   }>()
   const { messages: rawMessages, documentId, activeFilePath, activeFileContent, modelId } = body
-  const messages = rawMessages
-
-  if (!Array.isArray(messages) || messages.length === 0) {
+  if (!Array.isArray(rawMessages) || rawMessages.length === 0) {
     return c.json({ error: 'messages array is required' }, 400)
   }
   if (!documentId || typeof documentId !== 'string') {
@@ -487,22 +510,24 @@ app.post('/api/ai/chat', async (c) => {
   // then apply a sliding-window safety cap. Both are no-ops on short
   // sessions; kick in on long ones to keep cost bounded and avoid
   // context-window overflow on cheaper models.
-  const processedMessages = applySlidingWindow(
-    truncateOldToolResults(messages, KEEP_RECENT_TOOL_RESULTS),
+  const processedMessages = capModelMessageHistory(
+    pruneMessages({
+      messages: convertToModelMessages(rawMessages),
+      reasoning: 'before-last-message',
+      toolCalls: `before-last-${KEEP_RECENT_TOOL_RESULTS}-messages`,
+    }),
     HISTORY_CHAR_CAP,
     MIN_KEPT_MESSAGES,
   )
 
   const result = streamText({
-    // Provider factories return a V1|V2 union; streamText's types expect V1.
-    // At runtime all the providers we ship are V1-compatible.
-    model: providerFactory(resolvedModel.id) as LanguageModelV1,
+    model: providerFactory(resolvedModel.id),
     system: buildLatexSystemPrompt(context),
     messages: processedMessages,
     tools,
-    // Rich context means most turns resolve in 1–3 tool calls. maxSteps: 20
-    // stays as a ceiling for legitimate multi-file edits.
-    maxSteps: 20,
+    // Rich context means most turns resolve in 1–3 tool calls. Keep a generous
+    // ceiling for legitimate multi-file edits.
+    stopWhen: stepCountIs(20),
     // Cancel the upstream provider call when the HTTP client disconnects
     // (tab close, navigation, or explicit `stop()` from useChat).
     abortSignal: c.req.raw.signal,
@@ -511,8 +536,9 @@ app.post('/api/ai/chat', async (c) => {
     },
   })
 
-  return result.toDataStreamResponse({
-    getErrorMessage: (error) => {
+  return result.toUIMessageStreamResponse({
+    sendReasoning: false,
+    onError: (error: unknown): string => {
       console.error('[ai-chat] response error:', error)
       return error instanceof Error ? error.message : String(error)
     },

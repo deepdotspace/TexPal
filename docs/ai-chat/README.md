@@ -22,11 +22,11 @@ Left sidebar (client)                       /api/ai/chat (worker)
 ───────────────────                         ─────────────────────
 AiChatSidebar (collapse/resize)             1. verify JWT → userId
   └─ ChatPanel                              2. loadContext → query RecordRoom DO for
-      useChat({                                projectFiles + latest compilationLog
-        api: '/api/ai/chat',                   (under caller's RBAC)
-        body: { documentId, activeFilePath }  3. buildLatexSystemPrompt(ctx)
-        fetch: attach Bearer JWT              4. streamText({ model, system, messages,
-      })                                         tools, maxSteps: 20 })
+      DefaultChatTransport                     projectFiles + latest compilationLog
+        body: { documentId, activeFilePath }    (under caller's RBAC)
+        fetch: attach Bearer JWT              3. buildLatexSystemPrompt(ctx)
+      useChat({ transport })                  4. streamText({ model, system, messages,
+                                                 tools, stopWhen: stepCountIs(20) })
           │                                   5. return streaming response
           ▼                                          │
    ┌──────────────────┐  during generation,          │
