@@ -74,3 +74,38 @@ The context loader (`src/ai/context.ts`) hits the same `/api/tools/execute` endp
 ## 10. System prompt is assembled per turn
 
 Every `/api/ai/chat` request triggers a fresh context load and a fresh prompt. This is cheap (the DO query is in-memory SQL) and correct — state changes (user just edited something, ran a compile, switched files) are reflected immediately. Don't cache the prompt.
+
+## 11. "New chat" cannot be built on React's effect ordering
+
+The transcript lives in `localStorage`, and the chat is reset by remounting the
+inner `Chat` under a new key. The obvious wiring — bump a counter, wipe storage
+in a `ChatPanel` effect — does not work, and did not work: the button looked
+completely dead in production.
+
+Two independent reasons, both about *when* things run:
+
+1. **`useChat` reads its seed during render.** `@ai-sdk/react` builds its
+   `Chat` inside a `useRef` initializer and consumes `messages` in the
+   constructor. The replacement `Chat` has therefore already rehydrated the old
+   transcript before any effect runs — and React runs child effects before
+   parent effects anyway, so a parent effect is doubly too late.
+2. **The outgoing `Chat` writes on its way out.** Its unmount cleanup flushes
+   the final delta so a document switch loses nothing. During a reset that same
+   flush puts the discarded transcript straight back, in the window before the
+   replacement's 250ms debounce overwrites it. A reload there resurrects the
+   conversation.
+
+The fix is in `chatTranscript.ts` and does not depend on ordering at all:
+
+- The wipe happens in the click handler (`useNewChat` in `ChatPanel.tsx`),
+  which is strictly earlier than anything React does in response to the click.
+- Each mount claims a transcript **version** when it reads storage, and has to
+  present it to write. `clearTranscript` bumps the version, so every session
+  that read the old transcript is retired — permanently, not for 250ms.
+- A document switch bumps nothing, so the outgoing chat still flushes its
+  final delta under its own document's key.
+
+Also note `useChat` does **not** abort on unmount, contrary to what a remount
+suggests. `Chat` calls `stop()` in its unmount cleanup; without it, replacing
+the chat leaves an orphaned stream burning tokens into a transcript nobody
+renders.

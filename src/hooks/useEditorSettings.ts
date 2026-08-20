@@ -9,7 +9,6 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutations, useUser } from 'deepspace'
-// @ts-ignore — useUser returns { user } in the new SDK
 import { DEFAULT_EDITOR_SETTINGS } from '../constants'
 import type { CloudCompiler, BibEngine } from '../constants'
 

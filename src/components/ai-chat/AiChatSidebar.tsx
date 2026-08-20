@@ -12,9 +12,8 @@
  * See docs/ai-chat/sidebar-ux.md.
  */
 
-import { useState } from 'react'
 import { SquarePen } from 'lucide-react'
-import { ChatPanel } from './ChatPanel'
+import { ChatPanel, useNewChat } from './ChatPanel'
 
 /**
  * AssistantFace — dot-dot-curve persona icon for the assistant.
@@ -57,9 +56,9 @@ export function AiChatSidebar({
 }: AiChatSidebarProps) {
   const effectiveWidth = open ? width : 0
 
-  // Monotonic counter. Bumping it signals ChatPanel to reset — stop stream,
-  // clear messages state, wipe the doc's localStorage entry, focus the input.
-  const [newChatSignal, setNewChatSignal] = useState(0)
+  // "New chat" discards this document's transcript and remounts the panel.
+  // Both halves live in `useNewChat` so neither can happen without the other.
+  const { newChatSignal, startNewChat } = useNewChat(documentId)
 
   return (
     <aside
@@ -75,7 +74,7 @@ export function AiChatSidebar({
         </span>
         <button
           type="button"
-          onClick={() => setNewChatSignal((n) => n + 1)}
+          onClick={startNewChat}
           title="New chat"
           aria-label="New chat"
           className="toolbar-btn !w-6 !h-6 text-content-secondary hover:text-content transition-colors"

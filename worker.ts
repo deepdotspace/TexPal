@@ -18,12 +18,38 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import {
   verifyJwt,
+  authenticatedRoomRequest,
+  resolveAppRole as sdkResolveAppRole,
   createDeepSpaceAI,
   capToolResultSize,
   apiWorkerFetch,
   authWorkerFetch,
 } from 'deepspace/worker'
 import type { JwtVerifierConfig, VerifyResult } from 'deepspace/worker'
+
+/**
+ * Resolve a user's role from the app's canonical `users` collection.
+ *
+ * The SDK's resolveAppRole() addresses the RecordRoom as `app:${DEEPSPACE_APP_ID}`.
+ * This app's room - the one that actually holds the `users` rows this reads - is
+ * keyed `app:${APP_NAME}` (SCOPE_ID in src/constants.ts, what the client mounts
+ * RecordScope on, and every server-side idFromName in this file). Re-keying the
+ * room would orphan live data, so hand the SDK helper the name the room is
+ * actually stored under. The role logic itself is the SDK's, unchanged.
+ *
+ * This deliberately shadows the import so no call site can reach the raw export:
+ * a bare call reads an empty room and returns 'viewer' for everyone but the owner.
+ */
+function resolveAppRole(env: Env, userId: string) {
+  return sdkResolveAppRole(
+    {
+      RECORD_ROOMS: env.RECORD_ROOMS,
+      DEEPSPACE_APP_ID: env.APP_NAME,
+      OWNER_USER_ID: env.OWNER_USER_ID,
+    },
+    userId,
+  )
+}
 import {
   RecordRoom as RecordRoomBase,
   YjsRoom as YjsRoomBase,
@@ -49,6 +75,7 @@ import { buildLatexSystemPrompt } from './src/ai/latex-prompt.js'
 import { loadContext } from './src/ai/context.js'
 import { resolveModel } from './src/ai/models.js'
 import { makeScopeId } from './src/constants.js'
+import { reachesUserNamespace } from './src/lib/file-proxy-scope.js'
 
 // =============================================================================
 // DO Manifest — declares all Durable Objects for dynamic deploy bindings
@@ -95,7 +122,7 @@ export class CronRoom extends CronRoomBase<Env> {
 // Types
 // =============================================================================
 
-interface Env extends DOBindings<typeof __DO_MANIFEST__> {
+export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
   ASSETS: Fetcher
   FILES: R2Bucket
   PLATFORM_WORKER: Fetcher
@@ -331,47 +358,56 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
 // WebSocket routes
 // ---------------------------------------------------------------------------
 
+/**
+ * Proxy a browser WebSocket upgrade to the room Durable Object that owns it.
+ *
+ * The browser authenticates with `?token=<JWT>`; the DO is private and trusts
+ * only the verified identity headers `authenticatedRoomRequest` writes. That
+ * helper also strips the token and any client-supplied identity from both the
+ * query string and the headers, so neither channel can be spoofed.
+ */
 function wsRoute(
   doNamespace: (env: Env) => DurableObjectNamespace,
-  extraParams?: (auth: VerifyResult) => Record<string, string>,
+  extraIdentity?: (
+    auth: VerifyResult,
+    env: Env,
+  ) => { role?: string } | Promise<{ role?: string }>,
 ) {
   return async (c: any) => {
     const id = c.req.param('roomId') ?? c.req.param('docId') ?? c.req.param('scopeId')
-    const url = new URL(c.req.url)
-    const token = url.searchParams.get('token')
-    const auth = token ? (await verifyJwt(jwtConfig(c.env), token)).result : null
+    if (!id) return new Response('Not found', { status: 404 })
+    const token = new URL(c.req.url).searchParams.get('token')
 
-    const doUrl = new URL(c.req.url)
-    if (auth) {
-      doUrl.searchParams.set('userId', auth.userId)
-      if (extraParams) {
-        for (const [k, v] of Object.entries(extraParams(auth))) {
-          doUrl.searchParams.set(k, v)
-        }
-      }
+    let auth: VerifyResult | null = null
+    if (token) {
+      auth = (await verifyJwt(jwtConfig(c.env), token)).result
+      if (!auth) return new Response('Unauthorized', { status: 401 })
     }
-    doUrl.searchParams.delete('token')
+
+    const roomRequest = authenticatedRoomRequest(
+      c.req.raw,
+      auth,
+      auth ? await extraIdentity?.(auth, c.env) : undefined,
+    )
 
     const ns = doNamespace(c.env)
     const stub = ns.get(ns.idFromName(id))
-    return stub.fetch(new Request(doUrl.toString(), c.req.raw))
+    return stub.fetch(roomRequest)
   }
 }
 
+/** The app role the room must enforce, read from the canonical users collection. */
+const appRoleIdentity = async (auth: VerifyResult, env: Env) => ({
+  role: await resolveAppRole(env, auth.userId),
+})
+
 app.get('/ws/:roomId', wsRoute((env) => env.RECORD_ROOMS))
 
-app.get('/ws/yjs/:docId', wsRoute((env) => env.YJS_ROOMS, () => ({ role: 'member' })))
+app.get('/ws/yjs/:docId', wsRoute((env) => env.YJS_ROOMS, appRoleIdentity))
 
-app.get('/ws/canvas/:docId', wsRoute((env) => env.CANVAS_ROOMS, () => ({ role: 'member' })))
+app.get('/ws/canvas/:docId', wsRoute((env) => env.CANVAS_ROOMS, appRoleIdentity))
 
-app.get('/ws/presence/:scopeId', wsRoute(
-  (env) => env.PRESENCE_ROOMS,
-  (auth) => ({
-    ...(auth.claims.name ? { userName: auth.claims.name } : {}),
-    ...(auth.claims.email ? { userEmail: auth.claims.email } : {}),
-    ...(auth.claims.image ? { userImageUrl: auth.claims.image } : {}),
-  }),
-))
+app.get('/ws/presence/:scopeId', wsRoute((env) => env.PRESENCE_ROOMS))
 
 // ---------------------------------------------------------------------------
 // Server actions
@@ -620,16 +656,36 @@ app.post('/api/ai/chat', async (c) => {
 
 app.all('/api/files/*', async (c) => {
   const auth = await resolveAuth(c.req.raw, c.env)
-  const userId = auth?.result.userId ?? null
+
+  // Every file this app stores is scope 'self' — a document version's compiled
+  // PDF, uploaded and read with the owner's token. None of it is public and no
+  // browser ever fetches one without an Authorization header, so the whole
+  // mount requires a verified JWT: reads, listing, uploads and deletes alike.
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
 
   const url = new URL(c.req.url)
+
+  // A verified identity is not enough on its own: the platform resolves
+  // scope 'app' to `apps/<resourceId>/`, scope 'self' to a strict descendant
+  // of it, and admits keys with `key.startsWith(prefix)`. See
+  // src/lib/file-proxy-scope.ts for why that lets one signed-in user reach
+  // another's files and what this refuses.
+  if (reachesUserNamespace(url.pathname, url.searchParams)) {
+    return c.json({ error: 'Access denied: key belongs to a private scope' }, 403)
+  }
+
   const platformUrl = new URL(c.req.url)
   platformUrl.pathname = url.pathname.replace('/api/files', '/internal/files')
 
   const headers = new Headers(c.req.raw.headers)
+  // Strip any caller-supplied identity before setting our own. Only a
+  // JWT-derived userId may reach the platform-worker — otherwise an
+  // unauthenticated caller could send `x-user-id: <victim>` with `?scope=self`
+  // and the platform would resolve, and let it mutate, the victim's prefix.
+  headers.delete('x-user-id')
   headers.set('x-app-identity-token', c.env.APP_IDENTITY_TOKEN)
   headers.set('x-app-id', c.env.DEEPSPACE_APP_ID)
-  if (userId) headers.set('x-user-id', userId)
+  headers.set('x-user-id', auth.result.userId)
 
   const resp = await c.env.PLATFORM_WORKER.fetch(
     new Request(platformUrl.toString(), {
@@ -709,7 +765,12 @@ app.get('*', async (c) => {
   const response = await c.env.ASSETS.fetch(c.req.raw)
   if (response.status === 404) {
     const url = new URL(c.req.url)
-    url.pathname = '/index.html'
+    // A FILE, not a client route: a miss must 404. Returning the shell here
+    // is HTML parsed as JavaScript, which is a blank page.
+    if (url.pathname.slice(url.pathname.lastIndexOf('/') + 1).includes('.')) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    url.pathname = '/'
     return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw))
   }
   return response
