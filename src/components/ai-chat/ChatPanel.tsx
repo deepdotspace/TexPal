@@ -25,6 +25,7 @@ import {
   useRef,
   useEffect,
   useMemo,
+  useCallback,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -36,6 +37,7 @@ import { ArrowUp, AlertCircle, RefreshCw, Check, ChevronDown, Square } from 'luc
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CHAT_MODELS, DEFAULT_MODEL_ID, type ChatModelProvider } from '../../ai/models'
+import { readTranscript, saveTranscript, clearTranscript } from './chatTranscript'
 
 type ChatMessage = UIMessage
 type ChatPart = ChatMessage['parts'][number]
@@ -43,8 +45,10 @@ type ChatPart = ChatMessage['parts'][number]
 // ============================================================================
 // localStorage keys
 // ============================================================================
+//
+// The transcript itself lives in `chatTranscript.ts` — it needs a versioned
+// read/write contract, not a bare key.
 
-const MESSAGES_KEY_PREFIX = 'ai-chat-messages:'
 const MODEL_KEY = 'ai-chat-model'
 
 function loadModelId(): string {
@@ -55,6 +59,28 @@ function loadModelId(): string {
   return DEFAULT_MODEL_ID
 }
 
+/**
+ * Wires up a "New chat" control.
+ *
+ * The wipe and the remount have to travel together — a remount on its own just
+ * rebuilds the chat from the transcript still sitting in storage, which is
+ * exactly the bug this hook exists to make unrepresentable. So the caller gets
+ * one callback that does both, and `newChatSignal` is never bumped by hand.
+ *
+ * `clearTranscript` runs here, in the click handler, because that is strictly
+ * earlier than anything React does in response: the replacement `Chat` reads
+ * storage during its own render pass, so a wipe scheduled in an effect would
+ * always be too late.
+ */
+export function useNewChat(documentId: string) {
+  const [newChatSignal, setNewChatSignal] = useState(0)
+  const startNewChat = useCallback(() => {
+    clearTranscript(documentId)
+    setNewChatSignal((n) => n + 1)
+  }, [documentId])
+  return { newChatSignal, startNewChat }
+}
+
 interface ChatPanelProps {
   /** The document the user is currently editing. Required — messages scoped per document. */
   documentId: string
@@ -63,10 +89,10 @@ interface ChatPanelProps {
   /** Live editor buffer for the active file. See docs/ai-chat/gotchas.md #8. */
   activeFileContent: string
   /**
-   * Monotonically-increasing counter. When this value changes, ChatPanel
-   * clears the current conversation (stops any in-flight stream, wipes
-   * messages state, removes the doc's localStorage entry, focuses input).
-   * The initial value is ignored — only actual changes trigger a reset.
+   * Monotonically-increasing counter from `useNewChat`. A change remounts the
+   * inner chat, which drops the previous `useChat` instance (and aborts its
+   * stream) and starts from whatever the transcript store now holds — which
+   * `useNewChat` has already emptied. Bump it only through `useNewChat`.
    */
   newChatSignal?: number
 }
@@ -74,17 +100,6 @@ interface ChatPanelProps {
 export function ChatPanel({ documentId, activeFilePath, activeFileContent, newChatSignal }: ChatPanelProps) {
   const { isLoaded, isSignedIn } = useAuth()
   const [showAuth, setShowAuth] = useState(false)
-
-  // Wipe the persisted transcript when the user triggers "New chat" — runs
-  // before the inner Chat component remounts under its new key, so the fresh
-  // mount loads an empty conversation instead of rehydrating the old one.
-  const lastSignalRef = useRef<number | undefined>(newChatSignal)
-  useEffect(() => {
-    if (newChatSignal === undefined) return
-    if (lastSignalRef.current === newChatSignal) return
-    lastSignalRef.current = newChatSignal
-    try { localStorage.removeItem(MESSAGES_KEY_PREFIX + documentId) } catch { /* ignore */ }
-  }, [newChatSignal, documentId])
 
   if (!isLoaded) {
     return (
@@ -132,27 +147,6 @@ export function ChatPanel({ documentId, activeFilePath, activeFileContent, newCh
   )
 }
 
-function isPersistedMessage(value: unknown): value is ChatMessage {
-  if (!value || typeof value !== 'object') return false
-  const message = value as Record<string, unknown>
-  return (
-    typeof message.id === 'string' &&
-    typeof message.role === 'string' &&
-    Array.isArray(message.parts)
-  )
-}
-
-function loadPersistedMessages(documentId: string): ChatMessage[] {
-  try {
-    const raw = localStorage.getItem(MESSAGES_KEY_PREFIX + documentId)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter(isPersistedMessage) : []
-  } catch {
-    return []
-  }
-}
-
 function Chat({
   documentId,
   activeFilePath,
@@ -171,11 +165,13 @@ function Chat({
     try { localStorage.setItem(MODEL_KEY, modelId) } catch { /* ignore */ }
   }, [modelId])
 
-  // Lazy-init initialMessages from localStorage so the first render already
-  // contains the persisted transcript. Because this component is keyed by
-  // `${documentId}:${newChatSignal}` in its parent, a new mount always reads
-  // fresh storage — no need for a separate LOAD effect.
-  const initialMessages = useMemo(() => loadPersistedMessages(documentId), [documentId])
+  // Claim a transcript session for this mount. Read during render because
+  // `useChat` builds its state from `messages` in a ref initializer — by the
+  // time any effect runs, the conversation already exists. `session.version`
+  // is what entitles this mount to write; a "New chat" retires it (see
+  // chatTranscript.ts). Both fields are fixed for the life of the mount: the
+  // parent keys this component by `${documentId}:${newChatSignal}`.
+  const session = useMemo(() => readTranscript(documentId), [documentId])
 
   const [input, setInput] = useState('')
 
@@ -206,33 +202,38 @@ function Chat({
     regenerate,
     stop,
   } = useChat<ChatMessage>({
-    messages: initialMessages,
+    messages: session.messages,
     transport,
   })
 
   const isLoading = status === 'streaming' || status === 'submitted'
 
-  // Persist transcript to localStorage. Debounced to coalesce the bursty
-  // per-token updates during streaming — JSON.stringify of a long history on
-  // every token is a main-thread tax. The write also happens on unmount so
-  // we don't lose the final delta.
+  // Persist transcript. Debounced to coalesce the bursty per-token updates
+  // during streaming — JSON.stringify of a long history on every token is a
+  // main-thread tax. Every write carries `session.version`, so a superseded
+  // mount's late timer is dropped rather than resurrecting a discarded chat.
   const messagesRef = useRef(messages)
   messagesRef.current = messages
   useEffect(() => {
     const t = setTimeout(() => {
-      try {
-        localStorage.setItem(MESSAGES_KEY_PREFIX + documentId, JSON.stringify(messagesRef.current))
-      } catch { /* storage full or disabled */ }
+      saveTranscript(documentId, session.version, messagesRef.current)
     }, 250)
     return () => clearTimeout(t)
-  }, [messages, documentId])
+  }, [messages, documentId, session.version])
+
+  // On unmount: flush the final delta the debounce hasn't written yet, then
+  // abort the request. `useChat` does not abort on unmount, so without this an
+  // orphaned stream keeps burning tokens into a transcript nobody renders.
+  // Both are safe to do unconditionally — the flush is version-gated, and
+  // `stop()` no-ops unless a request is actually in flight.
+  const stopRef = useRef(stop)
+  stopRef.current = stop
   useEffect(() => {
     return () => {
-      try {
-        localStorage.setItem(MESSAGES_KEY_PREFIX + documentId, JSON.stringify(messagesRef.current))
-      } catch { /* ignore */ }
+      saveTranscript(documentId, session.version, messagesRef.current)
+      void stopRef.current()
     }
-  }, [documentId])
+  }, [documentId, session.version])
 
   // Auto-scroll: only if the user was already near the bottom. Otherwise they
   // scrolled up to re-read something and we shouldn't yank them back on

@@ -25,5 +25,8 @@ export default defineConfig({
   test: {
     // Unit tests only — tests/*.spec.ts are Playwright suites run by `deepspace test`.
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // Component tests render into a DOM and read localStorage.
+    environment: 'jsdom',
+    setupFiles: ['./src/test-setup.ts'],
   },
 })
