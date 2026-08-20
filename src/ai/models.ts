@@ -2,9 +2,29 @@
  * Chat model catalog — shared between client (dropdown) and worker (validation + provider routing).
  *
  * Every model lists its provider so the worker knows which `createDeepSpaceAI`
- * family to spin up. Model IDs match the DeepSpace API proxy's pricing table
- * — if you add a model, confirm it's priced there, otherwise users will be
- * over-billed at the generic Opus-rate fallback.
+ * family to spin up.
+ *
+ * Two rules govern what may appear here, and both are enforced by
+ * `models.test.ts`:
+ *
+ *  1. The provider must still serve the id. The DeepSpace proxy does NOT
+ *     validate model ids — its chat-completion integrations declare
+ *     `model: z.string()` and forward the value untouched, so a retired id
+ *     surfaces to the user as a raw provider 404. That is not hypothetical:
+ *     `claude-sonnet-4-20250514` broke resume upload in a sibling app, and
+ *     `claude-sonnet-4-5` and `claude-haiku-4-5-20251001` sat in this list
+ *     until the same sweep found them.
+ *  2. The proxy must price the id. Its `CHAT_MODEL_MULTIPLIERS` table charges
+ *     a known model at its real rate and everything else at the `'*'` fallback
+ *     of 5.0, so an unpriced model still runs but silently over-bills.
+ *
+ * Rule 2 is why `claude-opus-5` is absent despite being a current Anthropic
+ * model that the SDK's own `DEEPSPACE_AI_MODELS` lists: it has no multiplier
+ * row, so it would bill at 5.0x = $75/MTok against a real rate of $25. Add it
+ * only once the proxy table carries it.
+ *
+ * Never append a date suffix to a Claude id. Current ids are complete as-is;
+ * a dated id names a snapshot, and snapshots get retired.
  *
  * The first entry is the default — used when the client doesn't send a
  * model ID or sends one not in this catalog.
@@ -32,19 +52,27 @@ export const CHAT_MODELS: ReadonlyArray<ChatModel> = [
     hint: 'Balanced · default',
   },
   {
+    // Replaces `claude-sonnet-4-5`, which Anthropic has retired. Same 1.0
+    // multiplier at the proxy, so the swap costs the user nothing. Left out of
+    // the default slot deliberately: Sonnet 5 reasons before answering, so a
+    // `thinking` block shares the output budget with the answer on the long
+    // multi-file edits this app runs.
+    id: 'claude-sonnet-5',
+    label: 'Claude Sonnet 5',
+    provider: 'anthropic',
+    hint: 'Newest · reasons first',
+  },
+  {
     id: 'claude-opus-4-7',
     label: 'Claude Opus 4.7',
     provider: 'anthropic',
     hint: 'Most capable',
   },
   {
-    id: 'claude-sonnet-4-5',
-    label: 'Claude Sonnet 4.5',
-    provider: 'anthropic',
-    hint: 'Stable agent default',
-  },
-  {
-    id: 'claude-haiku-4-5-20251001',
+    // Undated. `claude-haiku-4-5-20251001` shipped here once; the proxy priced
+    // it correctly by stripping the suffix, but the dated snapshot itself is
+    // not guaranteed to resolve at Anthropic.
+    id: 'claude-haiku-4-5',
     label: 'Claude Haiku 4.5',
     provider: 'anthropic',
     hint: 'Fast',
