@@ -23,10 +23,49 @@
  */
 
 import { describe, expect, it, beforeAll } from 'vitest'
-import { SignJWT, exportSPKI, generateKeyPair } from 'jose'
 import { fileKeyFromPath, reachesUserNamespace } from './file-proxy-scope.js'
 import app from '../../worker.js'
 import type { Env } from '../../worker.js'
+
+// ── Minimal ES256 JWT minting (WebCrypto) ───────────────────────────────────
+// Deliberately not `jose`: it is an undeclared, npm-hoisted transitive of the
+// SDK here, so its resolution differs per app and a security regression test
+// must not depend on that.
+
+const ES256 = { name: 'ECDSA', namedCurve: 'P-256' } as const
+const ISSUER = 'https://auth.deep.space'
+
+function base64url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+async function publicKeyPem(key: CryptoKey): Promise<string> {
+  const der = new Uint8Array(await crypto.subtle.exportKey('spki', key))
+  let binary = ''
+  for (const byte of der) binary += String.fromCharCode(byte)
+  const body = btoa(binary).replace(/(.{64})/g, '$1\n')
+  return `-----BEGIN PUBLIC KEY-----\n${body}\n-----END PUBLIC KEY-----\n`
+}
+
+/** Sign an ES256 JWT. WebCrypto's ECDSA signature is already the raw r||s JWS wants. */
+async function signJwt(privateKey: CryptoKey, subject: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+  const encode = (value: unknown) => base64url(new TextEncoder().encode(JSON.stringify(value)))
+  const signingInput = `${encode({ alg: 'ES256', typ: 'JWT' })}.${encode({
+    sub: subject,
+    iss: ISSUER,
+    iat: now,
+    exp: now + 3600,
+  })}`
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privateKey,
+    new TextEncoder().encode(signingInput),
+  )
+  return `${signingInput}.${base64url(new Uint8Array(signature))}`
+}
 
 const SELF_KEY = 'apps/res_abc/users/user_real/compiled-doc-1.pdf'
 const VICTIM_KEY = 'apps/res_abc/users/user_victim/compiled-doc-1.pdf'
@@ -105,22 +144,16 @@ describe('/api/files/* proxy', () => {
   let token: string
 
   beforeAll(async () => {
-    const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true })
-    const issuer = 'https://auth.deep.space'
-    token = await new SignJWT({})
-      .setProtectedHeader({ alg: 'ES256' })
-      .setSubject('user_real')
-      .setIssuer(issuer)
-      .setIssuedAt()
-      .setExpirationTime('1h')
-      .sign(privateKey)
+    const pair = (await crypto.subtle.generateKey(ES256, true, ['sign', 'verify'])) as CryptoKeyPair
+    const publicKey = pair.publicKey
+    token = await signJwt(pair.privateKey, 'user_real')
 
     forwarded = []
     env = {
       APP_IDENTITY_TOKEN: 'identity-token',
       DEEPSPACE_APP_ID: 'app_01TEST',
-      AUTH_JWT_PUBLIC_KEY: await exportSPKI(publicKey),
-      AUTH_JWT_ISSUER: issuer,
+      AUTH_JWT_PUBLIC_KEY: await publicKeyPem(publicKey),
+      AUTH_JWT_ISSUER: ISSUER,
       PLATFORM_WORKER: {
         fetch: async (req: Request) => {
           forwarded.push(req)
@@ -173,13 +206,11 @@ describe('/api/files/* proxy', () => {
   it('treats an invalid JWT as anonymous, never as its claimed subject', async () => {
     // A forged token carrying `sub: user_victim` must not become an identity,
     // and neither must the header that accompanies it.
-    const forged = await new SignJWT({})
-      .setProtectedHeader({ alg: 'ES256' })
-      .setSubject('user_victim')
-      .setIssuer('https://auth.deep.space')
-      .setIssuedAt()
-      .setExpirationTime('1h')
-      .sign((await generateKeyPair('ES256', { extractable: true })).privateKey)
+    const impostor = (await crypto.subtle.generateKey(ES256, true, [
+      'sign',
+      'verify',
+    ])) as CryptoKeyPair
+    const forged = await signJwt(impostor.privateKey, 'user_victim')
 
     const res = await call(`/api/files/${VICTIM_KEY}?scope=self`, {
       headers: { Authorization: `Bearer ${forged}`, 'x-user-id': 'user_victim' },
