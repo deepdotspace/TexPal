@@ -75,6 +75,7 @@ import { buildLatexSystemPrompt } from './src/ai/latex-prompt.js'
 import { loadContext } from './src/ai/context.js'
 import { resolveModel } from './src/ai/models.js'
 import { makeScopeId } from './src/constants.js'
+import { reachesUserNamespace } from './src/lib/file-proxy-scope.js'
 
 // =============================================================================
 // DO Manifest — declares all Durable Objects for dynamic deploy bindings
@@ -121,7 +122,7 @@ export class CronRoom extends CronRoomBase<Env> {
 // Types
 // =============================================================================
 
-interface Env extends DOBindings<typeof __DO_MANIFEST__> {
+export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
   ASSETS: Fetcher
   FILES: R2Bucket
   PLATFORM_WORKER: Fetcher
@@ -655,16 +656,36 @@ app.post('/api/ai/chat', async (c) => {
 
 app.all('/api/files/*', async (c) => {
   const auth = await resolveAuth(c.req.raw, c.env)
-  const userId = auth?.result.userId ?? null
+
+  // Every file this app stores is scope 'self' — a document version's compiled
+  // PDF, uploaded and read with the owner's token. None of it is public and no
+  // browser ever fetches one without an Authorization header, so the whole
+  // mount requires a verified JWT: reads, listing, uploads and deletes alike.
+  if (!auth) return c.json({ error: 'Unauthorized' }, 401)
 
   const url = new URL(c.req.url)
+
+  // A verified identity is not enough on its own: the platform resolves
+  // scope 'app' to `apps/<resourceId>/`, scope 'self' to a strict descendant
+  // of it, and admits keys with `key.startsWith(prefix)`. See
+  // src/lib/file-proxy-scope.ts for why that lets one signed-in user reach
+  // another's files and what this refuses.
+  if (reachesUserNamespace(url.pathname, url.searchParams)) {
+    return c.json({ error: 'Access denied: key belongs to a private scope' }, 403)
+  }
+
   const platformUrl = new URL(c.req.url)
   platformUrl.pathname = url.pathname.replace('/api/files', '/internal/files')
 
   const headers = new Headers(c.req.raw.headers)
+  // Strip any caller-supplied identity before setting our own. Only a
+  // JWT-derived userId may reach the platform-worker — otherwise an
+  // unauthenticated caller could send `x-user-id: <victim>` with `?scope=self`
+  // and the platform would resolve, and let it mutate, the victim's prefix.
+  headers.delete('x-user-id')
   headers.set('x-app-identity-token', c.env.APP_IDENTITY_TOKEN)
   headers.set('x-app-id', c.env.DEEPSPACE_APP_ID)
-  if (userId) headers.set('x-user-id', userId)
+  headers.set('x-user-id', auth.result.userId)
 
   const resp = await c.env.PLATFORM_WORKER.fetch(
     new Request(platformUrl.toString(), {
