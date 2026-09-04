@@ -154,6 +154,7 @@ function buildCompilationLog(data: any): CompilationLog {
 async function compileCloud(
   files: CompilationProjectFile[],
   entryFilePath: string,
+  documentId: string,
   compiler: CloudCompiler,
   bibEngine: BibEngine,
 ): Promise<CompilationResult> {
@@ -202,7 +203,12 @@ async function compileCloud(
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ compiler, resources, options: { bibliography: { command: bibEngine } } }),
+    body: JSON.stringify({
+      compiler,
+      projectId: documentId,
+      resources,
+      options: { bibliography: { command: bibEngine } },
+    }),
   })
 
   const response: any = await res.json()
@@ -213,12 +219,14 @@ async function compileCloud(
     return { success: true, pdfUrl: blobUrl, pdfBlob, compilationLog: buildCompilationLog(response.data) }
   }
 
+  const responseError =
+    response?.issues?.[0]?.message || response?.message || response?.error || 'Compilation failed'
   const compilationLog = response?.data
     ? buildCompilationLog(response.data)
     : {
         ...EMPTY_COMPILATION_LOG,
-        rawLog: response?.error || 'Compilation failed',
-        errors: [{ message: response?.error || 'Compilation failed', context: '' }],
+        rawLog: responseError,
+        errors: [{ message: responseError, context: '' }],
         summary: { ...EMPTY_COMPILATION_LOG.summary, errorsCount: 1, hasErrors: true },
       }
 
@@ -295,7 +303,7 @@ export function useCompilation({
     setCompilationLog(EMPTY_COMPILATION_LOG)
 
     try {
-      const result = await compileCloud(files, entryFilePath, compiler, bibEngine)
+      const result = await compileCloud(files, entryFilePath, documentId, compiler, bibEngine)
       if (result.success && result.pdfUrl) {
         const compiledAt = Date.now()
         if (prevBlobUrlRef.current) URL.revokeObjectURL(prevBlobUrlRef.current)

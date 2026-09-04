@@ -324,8 +324,15 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
 
   const target = `/api/integrations/${integrationName}/${c.req.param('endpoint')}`
 
-  const headers: Record<string, string> = {
+  // Forward only the headers this proxy owns. In particular, never trust
+  // caller-supplied app or user identity headers; the app identity below is
+  // injected from server bindings.
+  const headers = new Headers({
     'Content-Type': c.req.header('Content-Type') ?? 'application/json',
+  })
+  if (c.env.APP_IDENTITY_TOKEN) {
+    headers.set('x-app-id', c.env.DEEPSPACE_APP_ID)
+    headers.set('x-app-identity-token', c.env.APP_IDENTITY_TOKEN)
   }
 
   // Pick the JWT whose subject is the user we want billed:
@@ -334,19 +341,18 @@ app.all('/api/integrations/:name/:endpoint', async (c) => {
   // The api-worker bills the JWT subject; it does not accept any
   // client-supplied billing override.
   if (billingMode === 'developer') {
-    headers['Authorization'] = `Bearer ${c.env.APP_OWNER_JWT}`
+    headers.set('Authorization', `Bearer ${c.env.APP_OWNER_JWT}`)
   } else if (auth) {
-    headers['Authorization'] = `Bearer ${auth.token}`
+    headers.set('Authorization', `Bearer ${auth.token}`)
   }
 
   const hasBody = c.req.method !== 'GET' && c.req.method !== 'HEAD'
-  const body = hasBody ? await c.req.text() : undefined
 
   try {
     const res = await c.env.API_WORKER.fetch(`https://api-worker${target}`, {
       method: c.req.method,
       headers,
-      body,
+      body: hasBody ? c.req.raw.body : undefined,
     })
     return new Response(res.body, { status: res.status, headers: res.headers })
   } catch {
